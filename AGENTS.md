@@ -34,7 +34,11 @@ React/TS/Vite frontend, single server serving the built frontend.
   `/api/programs/beat` every ~60s, and `/api/programs/end` on exit (the `dispose` hook). Prompts are
   posted as `prompt.begin`/`prompt.end` to `/api/ingest/opencode` with a top-level
   `program: { id, source, host }` so the presence timeline can pin them to a lane (enabled via
-  `opencode.json`; deterministic SHA-1 ids so re-sends dedupe). Restart opencode after editing it.
+  `opencode.json`; deterministic SHA-1 ids so re-sends dedupe). The `/task <id>` command (declared
+  in `opencode.json`) is intercepted by the `command.execute.before` hook: it records a `task.set`
+  event, pins subsequent prompts of that session to the id (a `sessionTasks` map; `/task` alone
+  clears it), and throws to abort the command so no prompt reaches the model. Restart opencode
+  after editing it.
 - `plugins/post-commit` + `plugins/pre-push` — git hooks POSTing to `/api/ingest/git`; commit
   registers branch + commit id (+ repo/author/subject), push registers remote + branch + commit +
   prior sha as a distinct `push` event (`GitHistorySource.parse` branches on `kind`). Install with
@@ -74,6 +78,8 @@ React/TS/Vite frontend, single server serving the built frontend.
 - **Sources** (`sources.py`): subclass `SourceProvider`; implement `parse(raw) -> dict`. Set
   `is_pull = True` and override `fetch()` for pull sources. Register the class in `PROVIDERS`.
   `parse` returns canonical fields via `make_event(...)`; dedup with the `dedup(*parts)` helper.
+  `derive_task(...)` extracts a task key from the first candidate matching the `TASK_PATTERN` env
+  regex (git: commit subject, then branch; used by `GitHistorySource.parse`).
   Pull fetches run off the event loop (`asyncio.to_thread`) because `fetch()` is blocking.
 - **Ingest**: idempotent on `dedup_key` (external `id` or payload hash). New events are stored,
   duplicates ignored. `store_events` in `api.py` is the single write path.
@@ -91,19 +97,23 @@ React/TS/Vite frontend, single server serving the built frontend.
   `timestamp`; a trailing open runs to the query end), grouping them into one lane per process
   (`task`). `_pair_intervals` pairs `idle.start`/`idle.end` and `lock`/`unlock` into intervals;
   both are clamped to the query range.
+- **Code timeline**: `GET /api/timelines/code` returns the `git` source's `commit`/`push` events in
+  range; the frontend draws them as one passive `Code` row that is always `closed` (no active/idle
+  segments), with event dots.
 - **Style**: ruff from root `pyproject.toml` (line-length 120). Run `ruff format .` before finishing.
 
 ## Frontend (Vite + React 19 + TS + MUI)
 
 - **Pages**: `TimelinePage` (date range -> one `UnifiedTimeline` merging the `User` row with
-  `Agent N` lanes), `TaskPage` (search + filters + task list -> `Timeline` + event list),
-  `SourcesPage` (list + fetch + ingest example). `App.tsx` is a MUI `Tabs` shell; page selected by
-  `?page=`.
+  `Agent N` lanes), `TaskPage` (the "Events" tab — search + filters + task list -> `Timeline` +
+  event list; tasks are grouping keys, e.g. a Jira id), `SourcesPage` (list + fetch + ingest
+  example). `App.tsx` is a MUI `Tabs` shell; page selected by `?page=`.
 - **Timeline**: `src/components/Timeline.tsx` renders lanes as responsive HTML (percentage
   positions), dots colored by `kind`, optional duration bars, MUI tooltips.
   `src/components/UnifiedTimeline.tsx` renders one timeline: a single `User` row (all desktop
   `focus` spans flattened, no per-process rows) followed by one row per program lane labelled
-  `program@host` (with a `#N` suffix when several lanes share the same program+host). All rows share one theme — active = filled bar (user: `focus` spans; agent: `active`
+  `program@host` (with a `#N` suffix when several lanes share the same program+host), and a passive
+  `Code` row (git `commit`/`push` dots on a line that is always closed) below them. All rows share one theme — active = filled bar (user: `focus` spans; agent: `active`
   segments), idle = outlined bar (user: `idle` input intervals; agent: `idle` segments), closed =
   plain line (user: `lock` intervals; agent: `closed` segments) — with event dots overlaid on agent
   lanes. The timeline is cropped to the first/last activity

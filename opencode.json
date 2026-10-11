@@ -1,4 +1,10 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["./plugins/opencode-activity.ts"]
+  "plugin": ["./plugins/opencode-activity.ts"],
+  "command": {
+    "task": {
+      "description": "Set the Activity Monitor task id (e.g. a Jira key) for this session",
+      "template": "Set the Activity Monitor task to: $ARGUMENTS"
+    }
+  }
 }

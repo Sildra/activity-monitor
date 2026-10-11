@@ -79,6 +79,87 @@ def test_git_push_registers_branch_and_commit(tmp_path: Path) -> None:
         assert {event["kind"] for event in client.get("/api/tasks").json()} == {"push", "commit"}
 
 
+def test_git_task_derived_from_pattern(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TASK_PATTERN", r"JIRA-[0-9]+")
+
+    with make_client(tmp_path, GIT_SOURCE) as client:
+        events = [
+            # commit message wins over the branch when both match
+            {
+                "kind": "commit",
+                "repository": "/repo",
+                "commit": "c1",
+                "message": "JIRA-123 add login",
+                "branch": "feature/JIRA-456",
+                "author": "Jane",
+                "timestamp": "2026-01-01T00:00:00Z",
+            },
+            # no message -> falls back to the branch
+            {
+                "kind": "push",
+                "repository": "/repo",
+                "branch": "feature/JIRA-456-thing",
+                "reference": "refs/heads/feature/JIRA-456-thing",
+                "commit": "c2",
+                "remote": "origin",
+                "author": "Jane",
+                "timestamp": "2026-01-01T00:01:00Z",
+            },
+            # no match anywhere -> falls back to the repository name
+            {
+                "kind": "commit",
+                "repository": "/repo",
+                "commit": "c3",
+                "message": "no ticket here",
+                "author": "Jane",
+                "timestamp": "2026-01-01T00:02:00Z",
+            },
+        ]
+
+        assert client.post("/api/ingest/git", json={"events": events}).json() == {"accepted": 3}
+
+        tasks = {event["data"]["commit"]: event["task"] for event in client.get("/api/tasks").json()}
+        assert tasks == {"c1": "JIRA-123", "c2": "JIRA-456", "c3": "repo"}
+
+
+def test_code_timeline_returns_commits_and_pushes(tmp_path: Path) -> None:
+    with make_client(tmp_path, GIT_SOURCE) as client:
+        events = [
+            {
+                "kind": "commit",
+                "repository": "/repo",
+                "commit": "c1",
+                "message": "first",
+                "author": "Jane",
+                "timestamp": "2026-02-01T10:00:00Z",
+            },
+            {
+                "kind": "push",
+                "repository": "/repo",
+                "branch": "main",
+                "reference": "refs/heads/main",
+                "commit": "c1",
+                "remote": "origin",
+                "author": "Jane",
+                "timestamp": "2026-02-01T10:05:00Z",
+            },
+        ]
+
+        assert client.post("/api/ingest/git", json={"events": events}).json() == {"accepted": 2}
+
+        body = client.get(
+            "/api/timelines/code", params={"start": "2026-02-01T00:00:00Z", "end": "2026-02-02T00:00:00Z"}
+        ).json()
+
+        assert [event["kind"] for event in body["events"]] == ["commit", "push"]
+        assert body["events"][1]["data"]["remote"] == "origin"
+
+        empty = client.get(
+            "/api/timelines/code", params={"start": "2026-03-01T00:00:00Z", "end": "2026-03-02T00:00:00Z"}
+        ).json()
+        assert empty["events"] == []
+
+
 def test_agentic_timeline_groups_by_actor(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE) as client:
         client.post(
@@ -433,3 +514,44 @@ def test_user_timeline_open_span_runs_to_query_end(tmp_path: Path) -> None:
         span = body["lanes"][0]["spans"][0]
         assert datetime.fromisoformat(span["start"]) == t0
         assert datetime.fromisoformat(span["end"]) == end
+
+
+def test_tasks_merges_windows_focus_spans(tmp_path: Path) -> None:
+    with make_client(tmp_path, WINDOWS_SOURCE) as client:
+        t0 = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
+        fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
+
+        def send(payload: dict) -> None:
+            assert client.post("/api/ingest/windows", json=payload).status_code == 200
+
+        send({"id": "1", "kind": "focus", "task": "code", "title": "editor", "timestamp": fmt(t0)})
+        send(
+            {
+                "id": "2",
+                "kind": "focus",
+                "task": "code",
+                "title": "editor",
+                "timestamp": fmt(t0 + timedelta(minutes=10)),
+                "duration_ms": 600_000,
+            }
+        )
+        send(
+            {
+                "id": "3",
+                "kind": "focus",
+                "task": "code",
+                "title": "editor",
+                "timestamp": fmt(t0 + timedelta(minutes=10)),
+            }
+        )
+
+        events = client.get("/api/tasks").json()
+
+        assert len(events) == 2
+
+        live, span = events
+        assert live["duration_ms"] is None
+        assert datetime.fromisoformat(live["timestamp"]) == t0 + timedelta(minutes=10)
+
+        assert span["duration_ms"] == 600_000
+        assert datetime.fromisoformat(span["timestamp"]) == t0

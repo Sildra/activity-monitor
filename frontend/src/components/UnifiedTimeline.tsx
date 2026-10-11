@@ -512,6 +512,7 @@ export default function UnifiedTimeline({
     end,
     user,
     lanes,
+    code = [],
     onSelect,
     emptyLabel = "No activity in this range.",
 }: {
@@ -519,6 +520,7 @@ export default function UnifiedTimeline({
     end: string;
     user: UserActivity;
     lanes: UnifiedLane[];
+    code?: UnifiedTimelineEvent[];
     onSelect?: (event: UnifiedTimelineEvent) => void;
     emptyLabel?: string;
 }) {
@@ -531,7 +533,7 @@ export default function UnifiedTimeline({
 
     const hasUser = user.spans.length > 0 || user.idle.length > 0 || user.locked.length > 0;
 
-    if (!hasUser && lanes.length === 0) {
+    if (!hasUser && lanes.length === 0 && code.length === 0) {
         return (
             <Box sx={{ p: 3, textAlign: "center", color: "text.secondary" }}>
                 <Typography variant="body2">{emptyLabel}</Typography>
@@ -574,6 +576,17 @@ export default function UnifiedTimeline({
         });
     }
 
+    if (code.length > 0) {
+        displayLanes.push({
+            key: "code",
+            label: "Code",
+            detail: `${code.length} events`,
+            color: colorForKind("git"),
+            segments: [],
+            events: code,
+        });
+    }
+
     const busy: Array<[number, number]> = [];
 
     for (const lane of displayLanes) {
@@ -588,6 +601,14 @@ export default function UnifiedTimeline({
             if (right > left) {
                 busy.push([left, right]);
             }
+        }
+    }
+
+    for (const event of code) {
+        const ms = new Date(event.timestamp).getTime();
+
+        if (Number.isFinite(ms)) {
+            busy.push([ms - 1, ms + 1]);
         }
     }
 

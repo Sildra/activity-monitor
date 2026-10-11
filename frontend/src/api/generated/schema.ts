@@ -140,6 +140,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timelines/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Code Timeline */
+        get: operations["code_timeline_api_timelines_code_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timelines/agentic": {
         parameters: {
             query?: never;
@@ -267,6 +284,24 @@ export interface components {
              * @default []
              */
             lanes: components["schemas"]["ActorLane"][];
+        };
+        /** CodeTimeline */
+        CodeTimeline: {
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /**
+             * Events
+             * @default []
+             */
+            events: components["schemas"]["EventOut"][];
         };
         /** EventOut */
         EventOut: {
@@ -763,6 +798,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserTimeline"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    code_timeline_api_timelines_code_get: {
+        parameters: {
+            query?: {
+                start?: string | null;
+                end?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodeTimeline"];
                 };
             };
             /** @description Validation Error */

@@ -8,7 +8,7 @@ type Page = "timeline" | "task" | "sources";
 
 const PAGES: Array<{ id: Page; label: string }> = [
     { id: "timeline", label: "Timeline" },
-    { id: "task", label: "Task" },
+    { id: "task", label: "Events" },
     { id: "sources", label: "Sources" },
 ];
 

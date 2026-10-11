@@ -13,6 +13,7 @@ from activity_monitor.models import (
     ActivityEvent,
     ActorLane,
     AgenticTimeline,
+    CodeTimeline,
     EventOut,
     PresenceLane,
     PresenceTimeline,
@@ -497,6 +498,41 @@ async def user_timeline(
     )
 
 
+_CODE_SOURCE = "git"
+_CODE_KINDS = ("commit", "push")
+
+
+@router.get("/timelines/code", response_model=CodeTimeline)
+async def code_timeline(
+    session: SessionDep, start: datetime | None = Query(None), end: datetime | None = Query(None)
+) -> CodeTimeline:
+    now = datetime.now(UTC)
+    query_end = end or now
+    query_start = start or (now - timedelta(hours=24))
+
+    if query_start >= query_end:
+        raise HTTPException(400, "'start' must be before 'end'")
+
+    events = list(
+        (
+            await session.execute(
+                select(ActivityEvent)
+                .where(
+                    ActivityEvent.source == _CODE_SOURCE,
+                    ActivityEvent.kind.in_(_CODE_KINDS),
+                    ActivityEvent.timestamp >= query_start,
+                    ActivityEvent.timestamp <= query_end,
+                )
+                .order_by(ActivityEvent.timestamp.asc(), ActivityEvent.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    return CodeTimeline(start=query_start, end=query_end, events=[EventOut.from_event(event) for event in events])
+
+
 def _apply_filters(stmt, q: str | None, source: str | None, actor: str | None, kind: str | None, task: str | None):
     if q:
         pattern = f"%{q}%"
@@ -549,6 +585,41 @@ async def agentic_timeline(
     )
 
 
+def _merge_focus_spans(events: list[ActivityEvent]) -> list[EventOut]:
+    """Collapse each windows focus open/close pair into a single span event.
+
+    The desktop watcher records a span as an open (no ``duration_ms``) followed by a
+    close (with ``duration_ms``). Read back verbatim, every span shows up twice; here
+    they become one event dated at the span start and carrying the span's duration.
+    """
+    ordered = sorted(events, key=lambda event: (event.timestamp, event.id or 0))
+    merged: list[EventOut] = []
+    open_event: ActivityEvent | None = None
+
+    for event in ordered:
+        if event.source != _USER_SOURCE or event.kind != "focus":
+            merged.append(EventOut.from_event(event))
+            continue
+
+        if event.duration_ms is None:
+            open_event = event
+            continue
+
+        if open_event is not None:
+            span = EventOut.from_event(open_event)
+            span.duration_ms = event.duration_ms
+            merged.append(span)
+            open_event = None
+        else:
+            merged.append(EventOut.from_event(event))
+
+    if open_event is not None:
+        merged.append(EventOut.from_event(open_event))
+
+    merged.sort(key=lambda event: (event.timestamp, event.id or 0), reverse=True)
+    return merged
+
+
 @router.get("/tasks", response_model=list[EventOut])
 async def list_tasks(
     session: SessionDep,
@@ -572,7 +643,7 @@ async def list_tasks(
 
     events = list((await session.execute(stmt.limit(limit))).scalars().all())
 
-    return [EventOut.from_event(event) for event in events]
+    return _merge_focus_spans(events)
 
 
 @router.get("/tasks/summary", response_model=list[TaskSummary])

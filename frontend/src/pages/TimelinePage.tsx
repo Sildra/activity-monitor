@@ -14,6 +14,7 @@ import type { components } from "../api/generated/schema";
 type PresenceLane = components["schemas"]["PresenceLane"];
 type PresenceTimelineResponse = components["schemas"]["PresenceTimeline"];
 type UserTimelineResponse = components["schemas"]["UserTimeline"];
+type CodeTimelineResponse = components["schemas"]["CodeTimeline"];
 
 const TODAY = toDateInput(new Date());
 const WEEK_AGO = toDateInput(new Date(Date.now() - 6 * 86400_000));
@@ -23,6 +24,7 @@ export default function TimelinePage() {
     const [endDate, setEndDate] = useState(TODAY);
     const [lanes, setLanes] = useState<PresenceLane[]>([]);
     const [user, setUser] = useState<UserTimelineResponse | null>(null);
+    const [code, setCode] = useState<CodeTimelineResponse | null>(null);
     const [range, setRange] = useState<{ start: string; end: string }>({ start: "", end: "" });
     const [loading, setLoading] = useState(false);
     const [selected, setSelected] = useState<UnifiedTimelineEvent | null>(null);
@@ -30,15 +32,21 @@ export default function TimelinePage() {
     const load = useCallback(async (): Promise<{
         presence: PresenceTimelineResponse | null;
         user: UserTimelineResponse | null;
+        code: CodeTimelineResponse | null;
     }> => {
         const query = { start: startOfDay(startDate), end: endOfDay(endDate) };
 
-        const [presence, userTimeline] = await Promise.all([
+        const [presence, userTimeline, codeTimeline] = await Promise.all([
             api.GET("/api/timelines/presence", { params: { query } }),
             api.GET("/api/timelines/user", { params: { query } }),
+            api.GET("/api/timelines/code", { params: { query } }),
         ]);
 
-        return { presence: presence.data ?? null, user: userTimeline.data ?? null };
+        return {
+            presence: presence.data ?? null,
+            user: userTimeline.data ?? null,
+            code: codeTimeline.data ?? null,
+        };
     }, [startDate, endDate]);
 
     useEffect(() => {
@@ -55,6 +63,7 @@ export default function TimelinePage() {
             }
 
             setUser(data.user);
+            setCode(data.code);
         });
 
         return () => {
@@ -72,6 +81,7 @@ export default function TimelinePage() {
                 }
 
                 setUser(data.user);
+                setCode(data.code);
             })
             .finally(() => setLoading(false));
     }, [load]);
@@ -122,6 +132,16 @@ export default function TimelinePage() {
         locked: user?.locked ?? [],
     };
 
+    const codeEvents: UnifiedTimelineEvent[] = (code?.events ?? []).map((event) => ({
+        id: event.id ?? null,
+        timestamp: event.timestamp,
+        kind: event.kind,
+        actor: event.actor,
+        task: event.task,
+        title: event.title,
+        duration_ms: event.duration_ms,
+    }));
+
     return (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, height: "100%", p: 2, overflow: "auto" }}>
             <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2 }}>
@@ -157,6 +177,7 @@ export default function TimelinePage() {
                     end={range.end}
                     user={userActivity}
                     lanes={timelineLanes}
+                    code={codeEvents}
                     onSelect={setSelected}
                     emptyLabel="No activity in the selected range."
                 />

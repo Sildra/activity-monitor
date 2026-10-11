@@ -165,3 +165,9 @@ class UserTimeline(BaseModel):
     lanes: list[UserLane] = []
     idle: list[UserInterval] = []
     locked: list[UserInterval] = []
+
+
+class CodeTimeline(BaseModel):
+    start: datetime
+    end: datetime
+    events: list[EventOut] = []

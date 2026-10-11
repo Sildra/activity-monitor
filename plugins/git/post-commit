@@ -3,7 +3,10 @@
 # post-commit - report a new commit to the Activity Monitor.
 #
 # The monitor tracks commit actions by registering (at least) the current
-# branch and the commit id, plus the repository, author, timestamp and subject.
+# branch and the commit id, plus the repository, author and subject. The
+# timestamp is the moment the commit is recorded (not the commit's own git
+# date), so an --amend — which preserves the author date — still gets a fresh
+# time instead of collapsing onto the original commit.
 #
 # Install, from the repository you want to watch:
 #   git config core.hooksPath /absolute/path/to/activity_monitor/plugins
@@ -28,7 +31,7 @@ branch=$(git branch --show-current 2>/dev/null)
 repo=$(git rev-parse --show-toplevel 2>/dev/null)
 author=$(git log -1 --pretty=%an 2>/dev/null)
 email=$(git log -1 --pretty=%ae 2>/dev/null)
-timestamp=$(git log -1 --pretty=%aI 2>/dev/null)
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 message=$(git log -1 --pretty=%s 2>/dev/null)
 
 json_escape() {

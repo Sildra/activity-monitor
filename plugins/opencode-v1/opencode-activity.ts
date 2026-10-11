@@ -58,8 +58,15 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     const programId = opts.programId ?? getPid();
     const host = hostname();
     const pending = new Map<string, Pending>();
+    const sessionTasks = new Map<string, string>();
 
     let lastError = "";
+
+    const toast = (message: string, variant: "info" | "warning" | "error"): void => {
+        void client.tui
+            .showToast({ body: { title: "Activity Monitor", message, variant, duration: 6000 } })
+            .catch(() => undefined);
+    };
 
     const report = (message: string): void => {
         if (!message || message === lastError) {
@@ -67,11 +74,11 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
         }
 
         lastError = message;
-
-        void client.tui
-            .showToast({ body: { title: "Activity Monitor", message, variant: "error", duration: 6000 } })
-            .catch(() => undefined);
+        toast(message, "error");
     };
+
+    const sessionTask = (sessionID: string | undefined): string =>
+        (sessionID !== undefined ? sessionTasks.get(sessionID) : undefined) ?? projectName(directory);
 
     const post = async (path: string, body: unknown, attempts = 1, backoffMs = 750): Promise<boolean> => {
         let failure = "";
@@ -125,6 +132,37 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     }, opts.heartbeatMs ?? 60_000);
 
     return {
+        "command.execute.before": async (input) => {
+            if (input.command.replace(/^\//, "") !== "task") {
+                return;
+            }
+
+            const task = input.arguments.trim().replace(/^["']|["']$/g, "");
+
+            if (task) {
+                sessionTasks.set(input.sessionID, task);
+            } else {
+                sessionTasks.delete(input.sessionID);
+            }
+
+            await ingest({
+                id: stableId("task", input.sessionID, task),
+                kind: "task.set",
+                timestamp: new Date().toISOString(),
+                actor: opts.actor,
+                task: task || null,
+                title: task ? `task: ${task}` : "task cleared",
+                tags: ["opencode", "task"],
+                data: { sessionID: input.sessionID },
+                program: programEvents(),
+            });
+
+            toast(task ? `Task set to ${task}` : "Task cleared", "info");
+
+            // There is no cancellation API; throwing aborts the command so no prompt
+            // (and no model turn) is sent for /task. The TUI ignores the abort.
+            throw new Error("activity-monitor: task command handled");
+        },
         "chat.message": async (input, output) => {
             const text = output.parts
                 .filter((part) => part.type === "text")
@@ -142,7 +180,7 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
             pending.set(output.message.sessionID, {
                 messageID: output.message.id,
                 title,
-                task: projectName(directory),
+                task: sessionTask(output.message.sessionID),
                 start,
             });
 
@@ -151,7 +189,7 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
                 kind: "prompt.begin",
                 timestamp: new Date(start).toISOString(),
                 actor: opts.actor,
-                task: projectName(directory),
+                task: sessionTask(output.message.sessionID),
                 title: `prompt: ${title}`,
                 detail: text,
                 tags: ["opencode", "prompt"],

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import subprocess
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
@@ -59,6 +61,34 @@ def parse_timestamp(value: Any) -> datetime | None:
 def dedup(*parts: Any) -> str:
     payload = "\x1f".join("" if part is None else str(part) for part in parts)
     return hashlib.sha1(payload.encode("utf-8", errors="replace")).hexdigest()
+
+
+def derive_task(*candidates: str | None) -> str | None:
+    """Extract a task key (e.g. a Jira id) from the first candidate that matches.
+
+    The pattern comes from the ``TASK_PATTERN`` environment variable (a regex such as
+    ``JIRA-[0-9]+``); the first matching substring wins. Candidates are tried in order
+    (git uses the commit message first, then the branch), so commits and branches that
+    mention the same key group together under it.
+    """
+    pattern = os.environ.get("TASK_PATTERN", "").strip()
+
+    if not pattern:
+        return None
+
+    try:
+        regex = re.compile(pattern)
+    except re.error:
+        return None
+
+    for candidate in candidates:
+        if candidate:
+            match = regex.search(candidate)
+
+            if match:
+                return match.group(0)
+
+    return None
 
 
 def make_event(
@@ -288,7 +318,7 @@ class GitHistorySource(SourceProvider):
             kind=kind,
             timestamp=parse_timestamp(raw.get("timestamp")),
             actor=str(raw.get("author") or self.actor),
-            task=Path(repository).name or None,
+            task=derive_task(message, branch) or (Path(repository).name or None),
             title=title,
             detail=detail,
             tags=[tag for tag in ("git", kind, branch) if tag],

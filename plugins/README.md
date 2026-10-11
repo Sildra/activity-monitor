@@ -54,6 +54,11 @@ opencode** whenever the plugin changes. The plugin posts to
 `POST /api/ingest/opencode` and registers its heartbeat via
 `POST /api/programs/start|beat|end`.
 
+Run `/task <id>` (e.g. `/task JIRA-123`) to pin the session to a task: the plugin
+records a `task.set` event and tags subsequent `prompt.begin`/`prompt.end` events
+with that id (`/task` by itself clears it). The command is intercepted before the
+model runs, so it never produces an assistant turn.
+
 ## Standalone Windows monitor
 
 `../activity_monitor/windows_watcher.py` samples the foreground window, input-idle
@@ -109,3 +114,6 @@ The hooks need `git` and `curl` on `PATH` (both ship with Git for Windows).
 > these pushes: commit events dedupe against the same commit seen by `git log`,
 > while `push` events are keyed by remote + ref + commit so they stay distinct.
 > Enable the source (`sources.git.enabled: true`).
+> Git event tasks are derived by the backend from the `TASK_PATTERN` environment
+> variable (set on the backend): the commit subject is searched first, then the
+> branch, and the first match becomes the task (falling back to the repo name).

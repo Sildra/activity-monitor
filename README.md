@@ -11,9 +11,12 @@ into a single timeline and explored through two views.
   line): for the user, idle comes from input-idle events and closed from lock events; for programs,
   states follow prompt events (`prompt.begin` → active, `prompt.end` → idle, ended → closed) with
   prompt dots overlaid. Programs running on the same host at the same time collapse onto separate
-  lanes; a re-started program reuses the lowest free lane. Long stretches (over an hour) with
-  nothing active are compressed into axis breaks, keeping 15 minutes of context on each side.
-- **Task view** — search and filter events, browse the task list, and inspect a task's timeline.
+  lanes; a re-started program reuses the lowest free lane. A passive **Code** row sits below the
+  agent lanes, showing `git` `commit`/`push` events as dots on a line that is always **closed** (it
+  never turns active or idle). Long stretches (over an hour) with nothing active are compressed
+  into axis breaks, keeping 15 minutes of context on each side.
+- **Events view** — search and filter events, browse the task list (tasks are grouping keys —
+  e.g. a project, a process, or a Jira id), and open a task's timeline.
 
 One server hosts everything: a FastAPI backend that also serves its web UI.
 
@@ -57,6 +60,21 @@ pull sources cannot be pushed to.
 
 `POST /api/sources/{name}/fetch` asks a pull source for data and stores what is new.
 
+### Tasks (grouping keys)
+
+A task is a key used to group events together — for example a Jira id. Each source decides how an
+event's `task` is set:
+
+- **git** — set `TASK_PATTERN` in the backend's environment to a regular expression (e.g.
+  `JIRA-[0-9]+`). The git source (`GitHistorySource.parse`) searches the **commit subject first,
+  then the branch**, and uses the first match as the task; when nothing matches it falls back to
+  the repository name.
+- **windows** — the foreground process name (the `focus` `task`).
+- **opencode** — the project directory by default, overridable per session with the `/task`
+  command (below).
+
+`GET /api/tasks/summary` groups events by task.
+
 ## API
 
 | Endpoint | Purpose |
@@ -67,6 +85,7 @@ pull sources cannot be pushed to.
 | `GET /api/timelines/agentic` | Events grouped into per-actor lanes (`start`, `end`, `actor`) |
 | `GET /api/timelines/presence` | Program lanes with `active`/`idle`/`closed` state segments + events |
 | `GET /api/timelines/user` | Desktop activity: focus lanes per process + idle/locked intervals |
+| `GET /api/timelines/code` | `git` `commit`/`push` events in range (passive code line) |
 | `POST /api/programs/start` | Register a running program (`program_id`, `source`, `host`) |
 | `POST /api/programs/beat` | Heartbeat, keeps the program alive |
 | `POST /api/programs/end` | Close a program |
@@ -139,6 +158,11 @@ python supervisor.py                          # from the repo root
 Event ids are deterministic SHA-1 hashes of `prompt · begin|end · sessionID · messageID`, so the
 backend dedupes re-sends — the same prompt is never recorded twice.
 
+The custom command `/task <id>` (declared in `opencode.json`) pins a session to a task: the plugin
+records a `task.set` event and tags subsequent `prompt.begin`/`prompt.end` events with the id
+(`/task` by itself clears it). It intercepts the command **before** the model runs, so `/task`
+never produces an assistant turn.
+
 It is enabled via the repo's `opencode.json` and posts to `POST /api/ingest/opencode`
 (the `opencode` push source in `config.yaml`). Configure with plugin options or env vars:
 
@@ -196,6 +220,7 @@ never blocking the operation:
   and the previous (remote) sha.
 
 Install them with `git config core.hooksPath <repo>/plugins` (or copy/symlink into `.git/hooks`).
+The backend derives each git event's task from `TASK_PATTERN` (commit subject first, then branch).
 See `plugins/README.md` for all client setup.
 
 ## Development
