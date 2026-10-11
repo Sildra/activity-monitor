@@ -1,0 +1,176 @@
+import { useCallback, useEffect, useState } from "react";
+import { Box, Button, CircularProgress, Paper, TextField, Typography } from "@mui/material";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import { api } from "../api/client";
+import UnifiedTimeline, {
+    type UnifiedState,
+    type UnifiedTimelineEvent,
+    type UnifiedLane,
+    type UserActivity,
+} from "../components/UnifiedTimeline";
+import { endOfDay, startOfDay, toDateInput } from "../lib/format";
+import type { components } from "../api/generated/schema";
+
+type PresenceLane = components["schemas"]["PresenceLane"];
+type PresenceTimelineResponse = components["schemas"]["PresenceTimeline"];
+type UserTimelineResponse = components["schemas"]["UserTimeline"];
+
+const TODAY = toDateInput(new Date());
+const WEEK_AGO = toDateInput(new Date(Date.now() - 6 * 86400_000));
+
+export default function TimelinePage() {
+    const [startDate, setStartDate] = useState(WEEK_AGO);
+    const [endDate, setEndDate] = useState(TODAY);
+    const [lanes, setLanes] = useState<PresenceLane[]>([]);
+    const [user, setUser] = useState<UserTimelineResponse | null>(null);
+    const [range, setRange] = useState<{ start: string; end: string }>({ start: "", end: "" });
+    const [loading, setLoading] = useState(false);
+    const [selected, setSelected] = useState<UnifiedTimelineEvent | null>(null);
+
+    const load = useCallback(async (): Promise<{
+        presence: PresenceTimelineResponse | null;
+        user: UserTimelineResponse | null;
+    }> => {
+        const query = { start: startOfDay(startDate), end: endOfDay(endDate) };
+
+        const [presence, userTimeline] = await Promise.all([
+            api.GET("/api/timelines/presence", { params: { query } }),
+            api.GET("/api/timelines/user", { params: { query } }),
+        ]);
+
+        return { presence: presence.data ?? null, user: userTimeline.data ?? null };
+    }, [startDate, endDate]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        load().then((data) => {
+            if (cancelled) {
+                return;
+            }
+
+            if (data.presence) {
+                setLanes(data.presence.lanes);
+                setRange({ start: data.presence.start, end: data.presence.end });
+            }
+
+            setUser(data.user);
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [load]);
+
+    const refresh = useCallback(() => {
+        setLoading(true);
+        load()
+            .then((data) => {
+                if (data.presence) {
+                    setLanes(data.presence.lanes);
+                    setRange({ start: data.presence.start, end: data.presence.end });
+                }
+
+                setUser(data.user);
+            })
+            .finally(() => setLoading(false));
+    }, [load]);
+
+    const laneCounts = new Map<string, number>();
+
+    for (const lane of lanes) {
+        const key = `${lane.source}@${lane.host}`;
+        laneCounts.set(key, (laneCounts.get(key) ?? 0) + 1);
+    }
+
+    const timelineLanes: UnifiedLane[] = lanes.map((lane) => {
+        const base = lane.host ? `${lane.source}@${lane.host}` : lane.source;
+
+        return {
+            key: lane.key,
+            label: laneCounts.get(`${lane.source}@${lane.host}`) === 1 ? base : `${base} #${lane.parallel_id + 1}`,
+            source: lane.source,
+            host: lane.host,
+            parallelId: lane.parallel_id,
+            segments: lane.segments.map((segment) => ({
+                start: segment.start,
+                end: segment.end,
+                state: segment.state as UnifiedState,
+            })),
+            events: lane.events.map((event) => ({
+                id: event.id ?? null,
+                timestamp: event.timestamp,
+                kind: event.kind,
+                actor: event.actor,
+                task: event.task,
+                title: event.title,
+                duration_ms: event.duration_ms,
+            })),
+        };
+    });
+
+    const userActivity: UserActivity = {
+        spans: (user?.lanes ?? []).flatMap((lane) =>
+            lane.spans.map((span) => ({
+                start: span.start,
+                end: span.end,
+                title: span.title,
+                process: lane.process,
+            })),
+        ),
+        idle: user?.idle ?? [],
+        locked: user?.locked ?? [],
+    };
+
+    return (
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2, height: "100%", p: 2, overflow: "auto" }}>
+            <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2 }}>
+                <Typography variant="h6">Timeline</Typography>
+                <TextField
+                    label="From"
+                    type="date"
+                    size="small"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    slotProps={{ inputLabel: { shrink: true } }}
+                />
+                <TextField
+                    label="To"
+                    type="date"
+                    size="small"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    slotProps={{ inputLabel: { shrink: true } }}
+                />
+                <Button variant="outlined" startIcon={<RefreshIcon />} onClick={refresh} disabled={loading}>
+                    Refresh
+                </Button>
+                {loading && <CircularProgress size={20} />}
+            </Box>
+
+            <Paper variant="outlined" sx={{ p: 2, flex: 1, minHeight: 200, overflow: "auto" }}>
+                <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                    Activity
+                </Typography>
+                <UnifiedTimeline
+                    start={range.start}
+                    end={range.end}
+                    user={userActivity}
+                    lanes={timelineLanes}
+                    onSelect={setSelected}
+                    emptyLabel="No activity in the selected range."
+                />
+            </Paper>
+
+            {selected && (
+                <Paper variant="outlined" sx={{ p: 2 }}>
+                    <Typography variant="subtitle2">{selected.title ?? selected.kind}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                        {selected.actor} · {selected.kind} · {new Date(selected.timestamp).toLocaleString()}
+                        {selected.task ? ` · ${selected.task}` : ""}
+                    </Typography>
+                </Paper>
+            )}
+        </Box>
+    );
+}

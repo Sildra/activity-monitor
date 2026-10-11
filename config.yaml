@@ -1,0 +1,22 @@
+general:
+  api_port: 8001
+  database: activity.db
+sources:
+  bash:
+    kind: BashHistory
+    enabled: true
+    path: "~/.bash_history"
+    actor: user
+    max_entries: 1000
+  git:
+    kind: GitHistory
+    enabled: true
+    actor: user
+    max_commits: 500
+    repositories: []
+  opencode:
+    kind: Push
+    enabled: true
+  windows:
+    kind: Push
+    enabled: true

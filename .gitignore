@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+allure-results/
+allure-report/
+.venv/
+venv/
+node_modules/
+
+# Runtime artifacts (created in CWD)
+activity.db
+activity.db.*.bak
+activity.db.bak
+openapi_local.json
+
+# Frontend build output
+frontend/dist/
+frontend/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db

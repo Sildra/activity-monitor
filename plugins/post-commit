@@ -1,0 +1,56 @@
+#!/bin/sh
+#
+# post-commit - report a new commit to the Activity Monitor.
+#
+# The monitor tracks commit actions by registering (at least) the current
+# branch and the commit id, plus the repository, author, timestamp and subject.
+#
+# Install, from the repository you want to watch:
+#   git config core.hooksPath /absolute/path/to/activity_monitor/plugins
+# or copy/symlink this file into .git/hooks/post-commit and make it executable.
+#
+# The backend port comes from ACTIVITY_MONITOR_PORT (default 8001), the same
+# variable used by the opencode plugin and the standalone Windows watcher.
+#
+# The hook never blocks a commit: if the monitor is unreachable it exits 0.
+
+PORT="${ACTIVITY_MONITOR_PORT:-8001}"
+
+command -v curl >/dev/null 2>&1 || exit 0
+
+commit=$(git rev-parse HEAD 2>/dev/null) || exit 0
+[ -n "$commit" ] || exit 0
+
+branch=$(git branch --show-current 2>/dev/null)
+[ -n "$branch" ] || branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+[ "$branch" = "HEAD" ] && branch=""
+
+repo=$(git rev-parse --show-toplevel 2>/dev/null)
+author=$(git log -1 --pretty=%an 2>/dev/null)
+email=$(git log -1 --pretty=%ae 2>/dev/null)
+timestamp=$(git log -1 --pretty=%aI 2>/dev/null)
+message=$(git log -1 --pretty=%s 2>/dev/null)
+
+json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n'
+}
+
+json_field() {
+    printf '"%s"' "$(json_escape "$1")"
+}
+
+payload=$(printf '{"repository":%s,"commit":%s,"branch":%s,"author":%s,"email":%s,"timestamp":%s,"message":%s}' \
+    "$(json_field "$repo")" \
+    "$(json_field "$commit")" \
+    "$(json_field "$branch")" \
+    "$(json_field "$author")" \
+    "$(json_field "$email")" \
+    "$(json_field "$timestamp")" \
+    "$(json_field "$message")")
+
+curl -sS -m 2 -o /dev/null \
+    -X POST "http://127.0.0.1:${PORT}/api/ingest/git" \
+    -H "Content-Type: application/json" \
+    --data "$payload" || true
+
+exit 0

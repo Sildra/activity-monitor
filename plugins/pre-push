@@ -1,0 +1,83 @@
+#!/bin/sh
+#
+# pre-push - report git pushes to the Activity Monitor.
+#
+# Git has no post-push hook, so this runs during `git push` (just before the
+# transfer). It registers each pushed ref as a distinct `push` event carrying at
+# least the remote, the branch and the commit id, plus the previous (remote) sha
+# so the timeline can tell pushes apart from commits.
+#
+# Install, from the repository you want to watch:
+#   git config core.hooksPath /absolute/path/to/activity_monitor/plugins
+# or copy/symlink this file into .git/hooks/pre-push and make it executable.
+#
+# The backend port comes from ACTIVITY_MONITOR_PORT (default 8001), the same
+# variable used by the opencode plugin, the Windows watcher and post-commit.
+#
+# The hook never blocks a push: if the monitor is unreachable it exits 0.
+
+PORT="${ACTIVITY_MONITOR_PORT:-8001}"
+
+command -v curl >/dev/null 2>&1 || exit 0
+
+remote_name="$1"
+remote_url="$2"
+
+repo=$(git rev-parse --show-toplevel 2>/dev/null)
+author=$(git config user.name 2>/dev/null)
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n'
+}
+
+json_field() {
+    printf '"%s"' "$(json_escape "$1")"
+}
+
+events=""
+count=0
+
+while read -r local_ref local_sha remote_ref remote_sha || [ -n "$local_ref" ]; do
+    [ -n "$local_ref" ] || continue
+
+    # Ignore ref deletions (all-zero local sha) and no-op pushes.
+    case "$local_sha" in 0000000000000000000000000000000000000000) continue ;; esac
+    [ "$local_sha" = "$remote_sha" ] && continue
+
+    case "$local_ref" in
+        refs/heads/*) branch=${local_ref#refs/heads/} ;;
+        refs/tags/*) branch=${local_ref#refs/tags/} ;;
+        *) branch=$local_ref ;;
+    esac
+
+    event=$(printf '{"kind":"push","repository":%s,"branch":%s,"reference":%s,"commit":%s,"previous":%s,"remote":%s,"url":%s,"author":%s,"timestamp":%s}' \
+        "$(json_field "$repo")" \
+        "$(json_field "$branch")" \
+        "$(json_field "$local_ref")" \
+        "$(json_field "$local_sha")" \
+        "$(json_field "$remote_sha")" \
+        "$(json_field "$remote_name")" \
+        "$(json_field "$remote_url")" \
+        "$(json_field "$author")" \
+        "$(json_field "$timestamp")")
+
+    if [ "$count" -eq 0 ]; then
+        events="$event"
+    else
+        events="$events,$event"
+    fi
+
+    count=$((count + 1))
+done
+
+[ "$count" -gt 0 ] || exit 0
+
+payload=$(printf '{"events":[%s]}' "$events")
+
+curl -sS -m 2 -o /dev/null \
+    -X POST "http://127.0.0.1:${PORT}/api/ingest/git" \
+    -H "Content-Type: application/json" \
+    --data "$payload" || true
+
+exit 0
