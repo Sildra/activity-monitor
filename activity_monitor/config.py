@@ -19,6 +19,10 @@ DEFAULT_SESSION_GAP_MINUTES = 30
 DEFAULT_STALE_AFTER_SECONDS = 300
 
 
+def _optional_str(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
 @dataclass
 class AppConfig:
     database: str = DEFAULT_DATABASE
@@ -34,6 +38,8 @@ class AppConfig:
     ssl_keyfile: str | None = None
     ssl_ca_certs: str | None = None
     ssl_cert_reqs: str = "none"  # none|optional|required
+    basic_auth_username: str | None = None
+    basic_auth_password: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> AppConfig:
@@ -59,6 +65,8 @@ class AppConfig:
             ssl_keyfile=general.get("ssl_keyfile"),
             ssl_ca_certs=general.get("ssl_ca_certs"),
             ssl_cert_reqs=str(general.get("ssl_cert_reqs", "none")),
+            basic_auth_username=_optional_str(general.get("basic_auth_username")),
+            basic_auth_password=_optional_str(general.get("basic_auth_password")),
             sources=dict(data.get("sources") or {}),
             pipelines=list(data.get("pipelines") or []),
             scanners=dict(data.get("scanners") or {}),

@@ -27,7 +27,7 @@ React/TS/Vite frontend, single server serving the built frontend.
   - `db.py` — async SQLite engine + `async_sessionmaker` + `get_session` dependency
   - `models.py` — `ActivityEvent` (SQLModel) + response models (`EventOut`, `ActorLane`, …)
   - `sources.py` — `SourceProvider` base, `BashHistory`/`GitHistory`/`Push` providers, `PROVIDERS`, `build_sources`
-  - `api.py` — all endpoints (one router)
+  - `api.py` — all endpoints (one router) + optional HTTP Basic auth dependency (`require_auth`)
 - `frontend/` — Vite + React 19 + TS + MUI app
 - `plugins/opencode-v2/` — opencode 2 plugin (entry `index.ts`, `@opencode/plugin`) reporting program
   lifecycle + prompts: on load it POSTs `/api/programs/start` with `program_id` = the OS PID
@@ -46,7 +46,10 @@ React/TS/Vite frontend, single server serving the built frontend.
   registers branch + commit id (+ repo/author/subject), push registers remote + branch + commit +
   prior sha as a distinct `push` event (`GitHistorySource.parse` branches on `kind`). Install with
   `git config core.hooksPath <repo>/plugins/git`; `plugins/README.md` documents client setup. Every
-  client (plugin, standalone watcher, hooks) reads `ACTIVITY_MONITOR_PORT` (default 8001); the
+  client (plugin, standalone watcher, hooks) reads `ACTIVITY_MONITOR_URL` (plus the optional
+  `ACTIVITY_MONITOR_CA_CERT`/`_CLIENT_CERT`/`_CLIENT_KEY` mTLS and
+  `ACTIVITY_MONITOR_USERNAME`/`_PASSWORD` basic-auth variables) and legacy
+  `ACTIVITY_MONITOR_PORT` (default 8001); the
   backend also uses it as the port default when `--port` is not passed.
 - `pyproject.toml` — metadata, deps, ruff config, hatchling build, scripts `activity-monitor` +
   `activity-monitor-windows`
@@ -68,11 +71,18 @@ React/TS/Vite frontend, single server serving the built frontend.
 
 - **Run**: `python -m activity_monitor.main` from repo root. Flags: `--config` (default
   `config.yaml`), `--database`, `--port` (default from config, 8001), `--openapi FILE`,
-  `--watch-windows` (embed the desktop watcher; or `general.watch_windows` in config).
+  `--watch-windows` (embed the desktop watcher; or `general.watch_windows` in config),
+  `--basic-auth-username`/`--basic-auth-password` (require HTTP Basic auth on `/api/*`).
 - **Intentionally minimal**: no services framework, no thread pool, no pipeline engine, no
   statistics. Direct async DB access from handlers. Keep it that way unless there is a real need.
 - **Config**: `AppConfig` dataclass loaded with `yaml.safe_load`; `config.yaml` is committed and
-  holds `general` (api_port, database, optional stale_after_seconds, watch_windows) and `sources`.
+  holds `general` (api_port, database, optional stale_after_seconds, watch_windows,
+  basic_auth_username/basic_auth_password) and `sources`.
+- **Auth**: optional HTTP Basic auth on every `/api/*` route via the `require_auth` dependency
+  (`api.py`), mounted by `create_app` only when `general.basic_auth_username` is set. Credentials
+  are compared with `secrets.compare_digest`; a mismatch returns `401` + `WWW-Authenticate: Basic`.
+  The static UI and the OpenAPI docs stay public. All external clients send the
+  `ACTIVITY_MONITOR_USERNAME`/`ACTIVITY_MONITOR_PASSWORD` variables.
 - **Models**: one table `ActivityEvent` (`source`, `kind`, `actor`, `task`, `timestamp`,
   `duration_ms`, `title`, `detail`, `tags` JSON, `data` JSON, unique `dedup_key`) + `Program`
   (`program_id`, `source`, `host`, `actor`, `started_at`, `last_seen_at`,

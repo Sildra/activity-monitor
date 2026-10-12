@@ -18,6 +18,8 @@ at your server.
 | `ACTIVITY_MONITOR_CLIENT_CERT` | — | all clients (mTLS client certificate) |
 | `ACTIVITY_MONITOR_CLIENT_KEY` | — | all clients (mTLS client key) |
 | `ACTIVITY_MONITOR_SSL_INSECURE` | — | all clients (`1` disables verification, dev only) |
+| `ACTIVITY_MONITOR_USERNAME` | — | all clients (HTTP Basic auth username) |
+| `ACTIVITY_MONITOR_PASSWORD` | — | all clients (HTTP Basic auth password) |
 
 ## TLS / mTLS
 
@@ -50,6 +52,25 @@ $env:ACTIVITY_MONITOR_URL = "https://localhost:8001"   # PowerShell
 ```bat
 set ACTIVITY_MONITOR_URL=https://localhost:8001        & rem cmd.exe
 ```
+
+## Basic auth
+
+If the backend is started with HTTP Basic auth (see `general.basic_auth_username` /
+`--basic-auth-username` in the main `README.md`), every client must send credentials.
+Set the shared variables before starting the client:
+
+- `ACTIVITY_MONITOR_USERNAME` — the username.
+- `ACTIVITY_MONITOR_PASSWORD` — the password (optional; defaults to empty).
+
+```powershell
+$env:ACTIVITY_MONITOR_USERNAME = "alice"      # PowerShell
+$env:ACTIVITY_MONITOR_PASSWORD = "s3cret"
+```
+
+The Windows watcher and the opencode plugins send an
+`Authorization: Basic ...` header; the git hooks pass `-u "$USERNAME:$PASSWORD"`
+to `curl`. Only the `/api/*` routes are protected — the static UI and `/docs`
+stay public.
 
 ## OpenCode
 
@@ -87,7 +108,8 @@ is set before opencode starts, then **restart opencode** whenever the plugin cha
 The plugin posts to `POST /api/ingest/opencode` and registers its heartbeat via
 `POST /api/programs/start|beat|end`. For mTLS, configure the client certificates
 with the shared `ACTIVITY_MONITOR_CA_CERT` / `ACTIVITY_MONITOR_CLIENT_CERT` /
-`ACTIVITY_MONITOR_CLIENT_KEY` variables (the plugins pass them to `node:https`).
+`ACTIVITY_MONITOR_CLIENT_KEY` variables (the plugins pass them to `node:https`);
+for HTTP Basic auth, set `ACTIVITY_MONITOR_USERNAME` / `ACTIVITY_MONITOR_PASSWORD`.
 
 Run `/task <id>` (e.g. `/task JIRA-123`) to pin the session to a task: the plugin
 records a `task.set` event and tags subsequent `prompt.begin`/`prompt.end` events
@@ -188,7 +210,9 @@ and both always exiting `0`, so a stopped monitor never blocks a commit or push.
   (remote) sha. Git has no post-push hook, so it runs just before the transfer;
   ref deletions and no-op pushes are ignored. For HTTPS with self-signed certs or mTLS,
   pass `-k` (insecure) to curl or ensure CA/client certs are configured in the shell
-  environment. The hooks use `curl` and respect `ACTIVITY_MONITOR_URL`.
+  environment. The hooks use `curl`, respect `ACTIVITY_MONITOR_URL`, and pass
+  `-u "$ACTIVITY_MONITOR_USERNAME:$ACTIVITY_MONITOR_PASSWORD"` when basic auth is
+  configured.
 
 Install both for any repository you want to track:
 

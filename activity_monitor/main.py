@@ -5,7 +5,7 @@ from importlib import resources
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.concurrency import asynccontextmanager
 
 from activity_monitor import api, db
@@ -32,6 +32,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--ssl-keyfile", type=Path, default=None, help="Path to SSL private key file")
     parser.add_argument("--ssl-ca-certs", type=Path, default=None, help="Path to CA certificate for client auth")
     parser.add_argument("--ssl-cert-reqs", default=None, help="Client cert requirement: none|optional|required")
+    parser.add_argument("--basic-auth-username", default=None, help="Require HTTP Basic auth with this username")
+    parser.add_argument("--basic-auth-password", default=None, help="HTTP Basic auth password")
     return parser.parse_args()
 
 
@@ -59,6 +61,11 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         config.ssl_ca_certs = str(args.ssl_ca_certs)
     if getattr(args, "ssl_cert_reqs", None) is not None:
         config.ssl_cert_reqs = args.ssl_cert_reqs
+
+    if getattr(args, "basic_auth_username", None) is not None:
+        config.basic_auth_username = args.basic_auth_username
+    if getattr(args, "basic_auth_password", None) is not None:
+        config.basic_auth_password = args.basic_auth_password
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -96,7 +103,8 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
     app = FastAPI(title="Activity Monitor", version="0.1.0", lifespan=lifespan)
     app.state.config = config
-    app.include_router(api.router)
+    auth_deps = [Depends(api.require_auth)] if config.basic_auth_username else []
+    app.include_router(api.router, dependencies=auth_deps)
 
     dev_dist = Path("frontend/dist")
     pkg_dist = Path(str(resources.files("activity_monitor") / "frontend" / "dist"))

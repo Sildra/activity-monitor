@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import ctypes
 import ctypes.wintypes as wt
 import json
@@ -101,6 +102,19 @@ def default_base_url() -> str:
     """Backend root for the standalone watcher."""
     url = os.environ.get("ACTIVITY_MONITOR_URL") or "http://127.0.0.1:8001"
     return url.rstrip("/")
+
+
+def build_auth_header() -> str | None:
+    """HTTP Basic `Authorization` header from `ACTIVITY_MONITOR_USERNAME`/`_PASSWORD`."""
+    username = os.environ.get("ACTIVITY_MONITOR_USERNAME")
+
+    if not username:
+        return None
+
+    password = os.environ.get("ACTIVITY_MONITOR_PASSWORD") or ""
+    token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
+
+    return f"Basic {token}"
 
 
 def build_ssl_context() -> ssl.SSLContext:
@@ -210,15 +224,16 @@ class HttpSink:
     def __init__(self, base_url: str, source: str) -> None:
         self.url = f"{base_url.rstrip('/')}/api/ingest/{source}"
         self._context = build_ssl_context()
+        self._auth = build_auth_header()
 
     def __call__(self, payload: dict[str, Any]) -> bool:
+        headers = {"Content-Type": "application/json"}
+
+        if self._auth is not None:
+            headers["Authorization"] = self._auth
+
         for _ in range(3):
-            req = request.Request(
-                self.url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
+            req = request.Request(self.url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
 
             try:
                 with request.urlopen(req, timeout=5, context=self._context):

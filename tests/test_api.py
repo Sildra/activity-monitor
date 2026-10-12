@@ -13,11 +13,17 @@ from activity_monitor.main import create_app
 from activity_monitor.models import as_utc
 
 
-def make_client(tmp_path: Path, extra: str = "", stale: int | None = None) -> TestClient:
+def make_client(
+    tmp_path: Path, extra: str = "", stale: int | None = None, basic_auth: tuple[str, str] | None = None
+) -> TestClient:
     general = f"  database: {(tmp_path / 'activity.db').as_posix()}"
 
     if stale is not None:
         general += f"\n  stale_after_seconds: {stale}"
+
+    if basic_auth is not None:
+        username, password = basic_auth
+        general += f"\n  basic_auth_username: {username}\n  basic_auth_password: {password}"
 
     config = tmp_path / "config.yaml"
     config.write_text(f"general:\n{general}\n{extra}", encoding="utf-8")
@@ -643,3 +649,49 @@ def test_tasks_merges_windows_focus_spans(tmp_path: Path) -> None:
 
         assert span["duration_ms"] == 600_000
         assert datetime.fromisoformat(span["timestamp"]) == t0
+
+
+AUTH = ("alice", "s3cret")
+
+
+def test_basic_auth_disabled_by_default(tmp_path: Path) -> None:
+    with make_client(tmp_path, PUSH_SOURCE) as client:
+        assert client.get("/api/stats").status_code == 200
+        assert client.post("/api/ingest/opencode", json={"id": "1", "title": "x"}).status_code == 200
+
+
+def test_basic_auth_challenges_unauthenticated_requests(tmp_path: Path) -> None:
+    with make_client(tmp_path, PUSH_SOURCE, basic_auth=AUTH) as client:
+        response = client.get("/api/stats")
+
+        assert response.status_code == 401
+        assert response.headers["www-authenticate"] == "Basic"
+
+
+def test_basic_auth_rejects_wrong_credentials(tmp_path: Path) -> None:
+    with make_client(tmp_path, PUSH_SOURCE, basic_auth=AUTH) as client:
+        assert client.get("/api/stats", auth=("alice", "wrong")).status_code == 401
+        assert client.get("/api/stats", auth=("bob", "s3cret")).status_code == 401
+
+
+def test_basic_auth_accepts_valid_credentials(tmp_path: Path) -> None:
+    with make_client(tmp_path, PUSH_SOURCE, basic_auth=AUTH) as client:
+        assert client.get("/api/stats", auth=AUTH).status_code == 200
+
+        event = {"id": "1", "kind": "tool_call", "actor": "agent-a", "title": "edited"}
+        assert client.post("/api/ingest/opencode", json=event).status_code == 401
+        assert client.post("/api/ingest/opencode", json=event, auth=AUTH).json() == {"accepted": 1}
+        assert client.get("/api/stats", auth=AUTH).json()["events"] == 1
+
+
+def test_basic_auth_rejects_malformed_header(tmp_path: Path) -> None:
+    with make_client(tmp_path, PUSH_SOURCE, basic_auth=AUTH) as client:
+        response = client.get("/api/stats", headers={"Authorization": "Bearer token"})
+
+        assert response.status_code == 401
+        assert response.headers["www-authenticate"] == "Basic"
+
+
+def test_basic_auth_leaves_docs_public(tmp_path: Path) -> None:
+    with make_client(tmp_path, PUSH_SOURCE, basic_auth=AUTH) as client:
+        assert client.get("/openapi.json").status_code == 200

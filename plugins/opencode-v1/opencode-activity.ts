@@ -94,12 +94,28 @@ const tlsOptions = (): TlsOptions => {
     return options;
 };
 
+const authHeaders = (): Record<string, string> => {
+    const username = envVar("ACTIVITY_MONITOR_USERNAME");
+
+    if (username === undefined || username === "") {
+        return {};
+    }
+
+    const password = envVar("ACTIVITY_MONITOR_PASSWORD") ?? "";
+
+    return { authorization: `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}` };
+};
+
 const postJson = (url: string, body: string, timeoutMs: number): Promise<{ ok: boolean; status: number }> =>
     new Promise((resolve, reject) => {
         const target = new URL(url);
         const base = {
             method: "POST",
-            headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+            headers: {
+                "content-type": "application/json",
+                "content-length": Buffer.byteLength(body),
+                ...authHeaders(),
+            },
             timeout: timeoutMs,
         };
         const onResponse = (res: IncomingMessage): void => {

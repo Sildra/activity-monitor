@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +38,32 @@ from activity_monitor.sources import SourceProvider
 router = APIRouter(prefix="/api")
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
+_security = HTTPBasic(auto_error=False)
+
+
+def require_auth(request: Request, credentials: Annotated[HTTPBasicCredentials | None, Depends(_security)]) -> None:
+    """Enforce HTTP Basic auth when the backend is configured with credentials.
+
+    Mounted on the API router (see `create_app`), so it only runs when
+    `general.basic_auth_username` is set; the static frontend and the OpenAPI
+    docs stay public.
+    """
+    config = request.app.state.config
+    username = config.basic_auth_username
+
+    if not username:
+        return
+
+    if credentials is None or not (
+        secrets.compare_digest(credentials.username, username)
+        and secrets.compare_digest(credentials.password, config.basic_auth_password or "")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
 
 
 def _stale_after(request: Request) -> timedelta:

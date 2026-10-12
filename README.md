@@ -53,6 +53,8 @@ Flags:
 - `--ssl-keyfile PATH` — server private key file
 - `--ssl-ca-certs PATH` — CA file to verify client certificates (for mTLS)
 - `--ssl-cert-reqs {none,optional,required}` — client cert requirement (default `none`)
+- `--basic-auth-username NAME` — require HTTP Basic auth with this username
+- `--basic-auth-password PASS` — HTTP Basic auth password
 
 Or run with the supervisor:
 
@@ -162,10 +164,35 @@ general:
 can connect. For `optional`, clients may connect without a cert (unauthenticated) or
 with a valid cert.
 
+### HTTP Basic auth
+
+As a transport-independent alternative (or complement) to mTLS, the `/api/*` routes can
+require HTTP Basic auth. When `basic_auth_username` is set, requests without valid
+credentials get `401 Unauthorized` with a `WWW-Authenticate: Basic` challenge; the
+static UI and the OpenAPI docs stay public (the browser prompts on the first API call).
+
+Using CLI flags:
+
+```bash
+python -m activity_monitor.main --basic-auth-username alice --basic-auth-password s3cret
+```
+
+Or in `config.yaml`:
+
+```yaml
+general:
+  api_port: 8001
+  basic_auth_username: alice
+  basic_auth_password: s3cret
+```
+
+Credentials are compared in constant time. If only `basic_auth_username` is set, the
+password is treated as empty.
+
 ### Client configuration
 
 All external clients (the Windows watcher, the opencode plugins and the git hooks) read the
-same variables and support HTTPS + mTLS (see `plugins/README.md`):
+same variables and support HTTPS + mTLS + basic auth (see `plugins/README.md`):
 
 | Variable | Purpose |
 | --- | --- |
@@ -174,21 +201,29 @@ same variables and support HTTPS + mTLS (see `plugins/README.md`):
 | `ACTIVITY_MONITOR_CLIENT_CERT` | Client certificate to present (mTLS) |
 | `ACTIVITY_MONITOR_CLIENT_KEY` | Client private key (mTLS) |
 | `ACTIVITY_MONITOR_SSL_INSECURE` | `1` to skip verification (development only) |
+| `ACTIVITY_MONITOR_USERNAME` | HTTP Basic auth username |
+| `ACTIVITY_MONITOR_PASSWORD` | HTTP Basic auth password |
 
 ```powershell
 $env:ACTIVITY_MONITOR_URL = "https://localhost:8001"
 $env:ACTIVITY_MONITOR_CA_CERT = "certs/ca.crt"
 $env:ACTIVITY_MONITOR_CLIENT_CERT = "certs/client-alice.crt"
 $env:ACTIVITY_MONITOR_CLIENT_KEY = "certs/client-alice.key"
+$env:ACTIVITY_MONITOR_USERNAME = "alice"
+$env:ACTIVITY_MONITOR_PASSWORD = "s3cret"
 ```
 
 The clients apply these directly:
 
-- **Windows watcher** — builds an `ssl.SSLContext` from the variables above.
-- **opencode plugins** — use `node:http`/`node:https` with `ca`, `cert` and `key` options.
-- **git hooks** — pass `--cacert`, `--cert` and `--key` to `curl` (`-k` when insecure).
+- **Windows watcher** — builds an `ssl.SSLContext` from the variables above and sends an
+  `Authorization: Basic ...` header.
+- **opencode plugins** — use `node:http`/`node:https` with `ca`, `cert` and `key` options
+  and send the `Authorization` header.
+- **git hooks** — pass `--cacert`, `--cert`, `--key` and `-u "$USERNAME:$PASSWORD"` to
+  `curl` (`-k` when insecure).
 - **Browser** — import `ca.crt` as a trusted root and `client-alice.p12` as a personal
-  certificate; the browser prompts for the client cert when the server requires mTLS.
+  certificate; the browser prompts for the client cert when the server requires mTLS, and
+  for basic auth credentials on the first API call.
 
 For a browser-only session (no client cert), simply trust `certs/ca.crt`.
 
