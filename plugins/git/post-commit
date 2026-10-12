@@ -51,7 +51,22 @@ payload=$(printf '{"repository":%s,"commit":%s,"branch":%s,"author":%s,"email":%
     "$(json_field "$timestamp")" \
     "$(json_field "$message")")
 
+CURL_OPTS=""
+if [ -n "${ACTIVITY_MONITOR_CLIENT_CERT:-}" ] && [ -n "${ACTIVITY_MONITOR_CLIENT_KEY:-}" ]; then
+  CURL_OPTS="$CURL_OPTS --cert ${ACTIVITY_MONITOR_CLIENT_CERT} --key ${ACTIVITY_MONITOR_CLIENT_KEY}"
+elif [ -n "${ACTIVITY_MONITOR_CLIENT_CERT:-}" ]; then
+  CURL_OPTS="$CURL_OPTS --cert ${ACTIVITY_MONITOR_CLIENT_CERT}"
+fi
+if [ -n "${ACTIVITY_MONITOR_CA_CERT:-}" ]; then
+  CURL_OPTS="$CURL_OPTS --cacert ${ACTIVITY_MONITOR_CA_CERT}"
+fi
+INSECURE="${ACTIVITY_MONITOR_SSL_INSECURE:-${ACTIVITY_MONITOR_INSECURE:-}}"
+case "$INSECURE" in
+  1|true|yes|on) CURL_OPTS="$CURL_OPTS -k" ;;
+esac
+
 curl -sS -m 2 -o /dev/null \
+    $CURL_OPTS \
     -X POST "${URL_BASE}/api/ingest/git" \
     -H "Content-Type: application/json" \
     --data "$payload" || true

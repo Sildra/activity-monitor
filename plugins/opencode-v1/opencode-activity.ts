@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { hostname } from "node:os";
 import type { Plugin } from "@opencode-ai/plugin";
 
@@ -43,6 +46,70 @@ const firstTask = (text: string, max: number): string => {
 
 const projectName = (directory: string): string => directory.split(/[\\/]/).filter(Boolean).pop() ?? "opencode";
 
+type TlsOptions = { ca?: Buffer; cert?: Buffer; key?: Buffer; rejectUnauthorized?: boolean };
+
+const readFile = (path: string | undefined): Buffer | undefined =>
+    path !== undefined && path !== "" ? readFileSync(path) : undefined;
+
+let cachedTls: TlsOptions | undefined;
+
+const tlsOptions = (): TlsOptions => {
+    if (cachedTls !== undefined) {
+        return cachedTls;
+    }
+
+    const options: TlsOptions = {};
+    const ca = readFile(envVar("ACTIVITY_MONITOR_CA_CERT"));
+    const cert = readFile(envVar("ACTIVITY_MONITOR_CLIENT_CERT"));
+    const key = readFile(envVar("ACTIVITY_MONITOR_CLIENT_KEY"));
+    const insecure = (envVar("ACTIVITY_MONITOR_SSL_INSECURE") ?? envVar("ACTIVITY_MONITOR_INSECURE") ?? "").toLowerCase();
+
+    if (ca !== undefined) {
+        options.ca = ca;
+    }
+
+    if (cert !== undefined) {
+        options.cert = cert;
+    }
+
+    if (key !== undefined) {
+        options.key = key;
+    }
+
+    if (["1", "true", "yes", "on"].includes(insecure)) {
+        options.rejectUnauthorized = false;
+    }
+
+    cachedTls = options;
+
+    return options;
+};
+
+const postJson = (url: string, body: string, timeoutMs: number): Promise<{ ok: boolean; status: number }> =>
+    new Promise((resolve, reject) => {
+        const target = new URL(url);
+        const base = {
+            method: "POST",
+            headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+            timeout: timeoutMs,
+        };
+        const onResponse = (res: IncomingMessage): void => {
+            const status = res.statusCode ?? 0;
+
+            res.resume();
+            res.on("end", () => resolve({ ok: status >= 200 && status < 300, status }));
+        };
+
+        const req =
+            target.protocol === "https:"
+                ? httpsRequest(target, { ...base, ...tlsOptions() }, onResponse)
+                : httpRequest(target, base, onResponse);
+
+        req.on("timeout", () => req.destroy(new Error("request timed out")));
+        req.on("error", reject);
+        req.end(body);
+    });
+
 export const OpenCodeActivity: Plugin = async ({ directory, client }, options) => {
     const port = envVar("ACTIVITY_MONITOR_PORT") ?? "8001";
 
@@ -85,12 +152,7 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
 
         for (let attempt = 0; attempt < attempts; attempt += 1) {
             try {
-                const response = await fetch(`${opts.baseUrl}${path}`, {
-                    method: "POST",
-                    headers: { "content-type": "application/json" },
-                    body: JSON.stringify(body),
-                    signal: AbortSignal.timeout(3000),
-                });
+                const response = await postJson(`${opts.baseUrl}${path}`, JSON.stringify(body), 3000);
 
                 if (response.ok) {
                     lastError = "";

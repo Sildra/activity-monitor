@@ -119,17 +119,32 @@ general:
 
 ## 7. Configure clients
 
-Set `ACTIVITY_MONITOR_URL` to point to your HTTPS backend:
+The bundled clients (Windows watcher, opencode plugins, git hooks) read a shared set of
+environment variables, so one configuration points them all at the HTTPS/mTLS backend:
 
-```bash
-export ACTIVITY_MONITOR_URL=https://localhost:8001
+| Variable | Purpose |
+| --- | --- |
+| `ACTIVITY_MONITOR_URL` | Backend root, e.g. `https://localhost:8001` |
+| `ACTIVITY_MONITOR_CA_CERT` | CA bundle that signed the server cert |
+| `ACTIVITY_MONITOR_CLIENT_CERT` | Client certificate to present (mTLS) |
+| `ACTIVITY_MONITOR_CLIENT_KEY` | Client private key (mTLS) |
+| `ACTIVITY_MONITOR_SSL_INSECURE` | `1` to skip verification (development only) |
+
+```powershell
+$env:ACTIVITY_MONITOR_URL = "https://localhost:8001"
+$env:ACTIVITY_MONITOR_CA_CERT = "certs/ca.crt"
+$env:ACTIVITY_MONITOR_CLIENT_CERT = "certs/client-alice.crt"
+$env:ACTIVITY_MONITOR_CLIENT_KEY = "certs/client-alice.key"
 ```
 
-### curl
+The Windows watcher builds an `ssl.SSLContext` from these; the opencode plugins pass them
+to `node:https`; the git hooks pass `--cacert` / `--cert` / `--key` to `curl`.
+
+### curl (manual)
 
 **HTTPS only (trusted CA):**
 ```bash
-curl https://localhost:8001/docs
+curl --cacert certs/ca.crt https://localhost:8001/docs
 ```
 
 **Self-signed/private CA not trusted:** add `-k`/`--insecure` (development only):
@@ -139,7 +154,9 @@ curl -k https://localhost:8001/docs
 
 **mTLS:**
 ```bash
-curl --cert certs/client-alice.crt --key certs/client-alice.key https://localhost:8001/docs
+curl --cacert certs/ca.crt \
+  --cert certs/client-alice.crt --key certs/client-alice.key \
+  https://localhost:8001/docs
 ```
 
 ### Python (httpx)
@@ -148,16 +165,14 @@ curl --cert certs/client-alice.crt --key certs/client-alice.key https://localhos
 ```python
 import httpx
 
-client = httpx.Client(
-    verify="certs/ca.crt",
-    cert=("certs/client-alice.crt", "certs/client-alice.key"),
-)
+client = httpx.Client(verify="certs/ca.crt", cert=("certs/client-alice.crt", "certs/client-alice.key"))
 resp = client.get("https://localhost:8001/docs")
 ```
 
-### Node (fetch)
+### Browser
 
-For Node.js, you'll need to construct an HTTPS agent (e.g. with the built-in `https` module). Point to CA and client cert/key as needed.
+Import `ca.crt` as a trusted root and `client-alice.p12` as a personal/client certificate.
+The browser prompts you to select the client certificate when the backend requires mTLS.
 
 ## Security notes
 

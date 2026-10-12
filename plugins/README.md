@@ -13,6 +13,28 @@ at your server.
 | `ACTIVITY_MONITOR_BASE_URL` | `http://localhost:$ACTIVITY_MONITOR_PORT` | legacy fallback for opencode plugins |
 | `ACTIVITY_MONITOR_SOURCE` | `opencode` | opencode plugin |
 | `ACTIVITY_MONITOR_ACTOR` | `$USER` / `$USERNAME` | opencode plugin |
+| `ACTIVITY_MONITOR_CA_CERT` | — | all clients (verify server, private CA) |
+| `ACTIVITY_MONITOR_CLIENT_CERT` | — | all clients (mTLS client certificate) |
+| `ACTIVITY_MONITOR_CLIENT_KEY` | — | all clients (mTLS client key) |
+| `ACTIVITY_MONITOR_SSL_INSECURE` | — | all clients (`1` disables verification, dev only) |
+
+## TLS / mTLS
+
+Every client can talk to an HTTPS backend and present a client certificate for mTLS.
+Set the shared variables before starting the client:
+
+- `ACTIVITY_MONITOR_URL` — use `https://...`.
+- `ACTIVITY_MONITOR_CA_CERT` — path to the CA bundle that signed the server cert (so a
+  private CA is trusted).
+- `ACTIVITY_MONITOR_CLIENT_CERT` / `ACTIVITY_MONITOR_CLIENT_KEY` — the client certificate
+  and key to present (mTLS).
+- `ACTIVITY_MONITOR_SSL_INSECURE=1` — skip verification (development only; do not use with
+  real certificates).
+
+The Windows watcher reads these via a `ssl.SSLContext`; the opencode plugins construct the
+same TLS options for their `node:http`/`node:https` requests; the git hooks pass them to
+`curl` as `--cacert`, `--cert` and `--key` (plus `-k` when insecure). See the main
+`README.md` and `docs/mtls-setup.md` for generating a CA, server and client certificates.
 
 The backend must be running and accessible at the URL configured via
 `ACTIVITY_MONITOR_URL` (or legacy variables if still used). For HTTPS/mTLS,

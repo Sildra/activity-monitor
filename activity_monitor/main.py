@@ -51,13 +51,13 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
     if getattr(args, "ssl", False):
         config.ssl_enabled = True
-    if args.ssl_certfile is not None:
+    if getattr(args, "ssl_certfile", None) is not None:
         config.ssl_certfile = str(args.ssl_certfile)
-    if args.ssl_keyfile is not None:
+    if getattr(args, "ssl_keyfile", None) is not None:
         config.ssl_keyfile = str(args.ssl_keyfile)
     if getattr(args, "ssl_ca_certs", None) is not None:
         config.ssl_ca_certs = str(args.ssl_ca_certs)
-    if args.ssl_cert_reqs is not None:
+    if getattr(args, "ssl_cert_reqs", None) is not None:
         config.ssl_cert_reqs = args.ssl_cert_reqs
 
     @asynccontextmanager

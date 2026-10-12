@@ -34,6 +34,7 @@ import ctypes
 import ctypes.wintypes as wt
 import json
 import os
+import ssl
 import threading
 import time
 from collections.abc import Callable
@@ -87,6 +88,30 @@ def default_base_url() -> str:
     """Backend root for the standalone watcher."""
     url = os.environ.get("ACTIVITY_MONITOR_URL") or "http://127.0.0.1:8001"
     return url.rstrip("/")
+
+
+def build_ssl_context() -> ssl.SSLContext:
+    """TLS context for the standalone watcher (private CA + client certificates).
+
+    - `ACTIVITY_MONITOR_CA_CERT`      - CA bundle used to verify the server.
+    - `ACTIVITY_MONITOR_CLIENT_CERT`  - client certificate (mTLS).
+    - `ACTIVITY_MONITOR_CLIENT_KEY`   - client private key (mTLS).
+    - `ACTIVITY_MONITOR_SSL_INSECURE` - `1|true|yes|on` disables verification (dev only).
+    """
+    cafile = os.environ.get("ACTIVITY_MONITOR_CA_CERT") or None
+    certfile = os.environ.get("ACTIVITY_MONITOR_CLIENT_CERT") or None
+    keyfile = os.environ.get("ACTIVITY_MONITOR_CLIENT_KEY") or None
+    insecure = os.environ.get("ACTIVITY_MONITOR_SSL_INSECURE") or os.environ.get("ACTIVITY_MONITOR_INSECURE") or ""
+    context = ssl.create_default_context(cafile=cafile)
+
+    if insecure.lower() in ("1", "true", "yes", "on"):
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+    if certfile:
+        context.load_cert_chain(certfile, keyfile)
+
+    return context
 
 
 def idle_millis() -> int:
@@ -156,6 +181,7 @@ class HttpSink:
 
     def __init__(self, base_url: str, source: str) -> None:
         self.url = f"{base_url.rstrip('/')}/api/ingest/{source}"
+        self._context = build_ssl_context()
 
     def __call__(self, payload: dict[str, Any]) -> bool:
         for _ in range(3):
@@ -167,7 +193,7 @@ class HttpSink:
             )
 
             try:
-                with request.urlopen(req, timeout=5):
+                with request.urlopen(req, timeout=5, context=self._context):
                     return True
             except OSError:
                 continue

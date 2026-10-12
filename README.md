@@ -164,18 +164,33 @@ with a valid cert.
 
 ### Client configuration
 
-All external clients read `ACTIVITY_MONITOR_URL` (see `plugins/README.md`).
+All external clients (the Windows watcher, the opencode plugins and the git hooks) read the
+same variables and support HTTPS + mTLS (see `plugins/README.md`):
 
-For HTTPS without client cert:
-- **curl**: `curl -k https://localhost:8001/...` for self-signed; if CA is trusted, omit `-k`.
-- **httpx** (Python clients): set `verify` to CA path or `True` if system-trusted.
-- **Node fetch** (opencode plugins): works if CA is trusted; for private CA set `NODE_EXTRA_CA_CERTS=certs/ca.crt`.
+| Variable | Purpose |
+| --- | --- |
+| `ACTIVITY_MONITOR_URL` | Backend root, e.g. `https://localhost:8001` |
+| `ACTIVITY_MONITOR_CA_CERT` | CA bundle that signed the server cert (private CA) |
+| `ACTIVITY_MONITOR_CLIENT_CERT` | Client certificate to present (mTLS) |
+| `ACTIVITY_MONITOR_CLIENT_KEY` | Client private key (mTLS) |
+| `ACTIVITY_MONITOR_SSL_INSECURE` | `1` to skip verification (development only) |
 
-For mTLS (client cert required):
-- **curl**: `curl --cert certs/client.crt --key certs/client.key https://localhost:8001/...`
-- **httpx**: `httpx.AsyncClient(verify="certs/ca.crt", cert=("certs/client.crt", "certs/client.key"))`
-- **Node fetch**: provide a custom HTTPS agent with `ca`, `cert`, `key` (e.g. using `undici` or `https` module).
-- **Browser**: import client cert (`client.p12`) and CA if needed; browser will prompt when connecting.
+```powershell
+$env:ACTIVITY_MONITOR_URL = "https://localhost:8001"
+$env:ACTIVITY_MONITOR_CA_CERT = "certs/ca.crt"
+$env:ACTIVITY_MONITOR_CLIENT_CERT = "certs/client-alice.crt"
+$env:ACTIVITY_MONITOR_CLIENT_KEY = "certs/client-alice.key"
+```
+
+The clients apply these directly:
+
+- **Windows watcher** — builds an `ssl.SSLContext` from the variables above.
+- **opencode plugins** — use `node:http`/`node:https` with `ca`, `cert` and `key` options.
+- **git hooks** — pass `--cacert`, `--cert` and `--key` to `curl` (`-k` when insecure).
+- **Browser** — import `ca.crt` as a trusted root and `client-alice.p12` as a personal
+  certificate; the browser prompts for the client cert when the server requires mTLS.
+
+For a browser-only session (no client cert), simply trust `certs/ca.crt`.
 
 **Security note:** The `certs/` directory contains private keys. Do not commit private
 keys to version control. The example above uses `certs/` which is gitignored in typical
