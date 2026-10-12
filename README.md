@@ -4,233 +4,185 @@ A self-hosted monitor for where your attention goes during a workday. Events fro
 sources — shell history, git commits, an editor/agent plugin, desktop activity — are normalized
 into a single timeline and explored through two views.
 
-- **Timeline view** — pick a date range and see where attention went in one unified timeline. The
-  first row is **User** (all desktop `focus` spans flattened, no per-process rows); each running
-  program gets a row named `program@host` (suffixed `#N` when several share the same program+host).
-  Every row uses the same theme — **active** (filled), **idle** (outlined), **closed** (plain
-  line): for the user, idle comes from input-idle events and closed from lock events; for programs,
-  states follow prompt events (`prompt.begin` → active, `prompt.end` → idle, ended → closed) with
-  prompt dots overlaid. Programs running on the same host at the same time collapse onto separate
-  lanes; a re-started program reuses the lowest free lane. A passive **Code** row sits below the
-  agent lanes, showing `git` `commit`/`push` events as dots on a line that is always **closed** (it
-  never turns active or idle). Long stretches (over an hour) with nothing active are compressed
-  into axis breaks, keeping 15 minutes of context on each side.
-- **Events view** — search and filter events, browse the task list (tasks are grouping keys —
-  e.g. a project, a process, or a Jira id), and open a task's timeline.
+## Quick Start
 
-One server hosts everything: a FastAPI backend that also serves its web UI.
+### 1. Install
+
+```bash
+pip install -e .
+```
+
+This installs the package with the `activity-monitor` and `activity-monitor-windows`
+entry points.
+
+### 2. Configure
+
+Create `config.yaml` in the project root (or point to it with `--config`). A minimal
+example:
+
+```yaml
+general:
+  api_port: 8001
+  database: activity_monitor.db
+  stale_after_seconds: 300
+  watch_windows: false
+sources:
+  - type: bash_history
+    path: ~/.bash_history
+  - type: git_history
+    repo: C:/path/to/repo
+```
+
+See `src/activity_monitor/sources.py` for available source types.
+
+### 3. Run
+
+From the repo root:
+
+```bash
+python -m activity_monitor.main
+```
+
+Flags:
+- `--config PATH` — path to config.yaml (default `config.yaml`)
+- `--database PATH` — override database location
+- `--port INT` — override API port (or set `ACTIVITY_MONITOR_PORT`)
+- `--watch-windows` — embed the Windows desktop watcher
+- `--ssl` — enable HTTPS
+- `--ssl-certfile PATH` — server certificate file
+- `--ssl-keyfile PATH` — server private key file
+- `--ssl-ca-certs PATH` — CA file to verify client certificates (for mTLS)
+- `--ssl-cert-reqs {none,optional,required}` — client cert requirement (default `none`)
+
+Or run with the supervisor:
+
+```bash
+python supervisor.py
+```
+
+The UI is served at `http://localhost:8001` (or `https://localhost:8001` if SSL is enabled).
+OpenAPI docs at `/docs`.
+
+## HTTPS & mTLS (Client Certificates)
+
+You can run the backend over HTTPS and optionally require client certificates for
+authentication.
+
+### Generate a private CA, server cert, and client certs
+
+From the repo root, create a `certs/` directory:
+
+```bash
+mkdir -p certs
+cd certs
+```
+
+#### 1. Create a private CA
+
+```bash
+openssl genrsa -out ca.key 4096
+openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 -out ca.crt -subj "/CN=ActivityMonitor-CA"
+```
+
+#### 2. Create a server certificate (for localhost)
+
+```bash
+openssl genrsa -out server.key 2048
+openssl req -new -key server.key -out server.csr -subj "/CN=localhost"
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 365 -sha256 -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1")
+```
+
+On Windows (Git Bash or WSL), the `extfile` with inline command works. If using cmd,
+create a file `server.ext` containing `subjectAltName=DNS:localhost,IP:127.0.0.1` and use
+`-extfile server.ext`.
+
+#### 3. Create a client certificate
+
+```bash
+openssl genrsa -out client.key 2048
+openssl req -new -key client.key -out client.csr -subj "/CN=alice"
+openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 365 -sha256
+```
+
+#### 4. Bundle for browser use (optional)
+
+```bash
+openssl pkcs12 -export -out client.p12 -inkey client.key -in client.crt -certfile ca.crt
+```
+
+Import `ca.crt` into your OS/browser as a Trusted Root CA, and `client.p12` into your
+browser as a personal/client certificate. When connecting with mTLS required, the
+browser will prompt you to select the client cert.
+
+### Run the backend with HTTPS
+
+Using CLI flags:
+
+```bash
+python -m activity_monitor.main --ssl \
+  --ssl-certfile certs/server.crt \
+  --ssl-keyfile certs/server.key
+```
+
+Using `config.yaml`:
+
+```yaml
+general:
+  api_port: 8001
+  ssl_enabled: true
+  ssl_certfile: certs/server.crt
+  ssl_keyfile: certs/server.key
+```
+
+### Run the backend with mTLS (require client certificates)
+
+To require valid client certs signed by your CA:
+
+```bash
+python -m activity_monitor.main --ssl \
+  --ssl-certfile certs/server.crt \
+  --ssl-keyfile certs/server.key \
+  --ssl-ca-certs certs/ca.crt \
+  --ssl-cert-reqs required
+```
+
+Or in `config.yaml`:
+
+```yaml
+general:
+  api_port: 8001
+  ssl_enabled: true
+  ssl_certfile: certs/server.crt
+  ssl_keyfile: certs/server.key
+  ssl_ca_certs: certs/ca.crt
+  ssl_cert_reqs: required
+```
+
+**Note:** For `required`, only clients presenting a valid certificate signed by the CA
+can connect. For `optional`, clients may connect without a cert (unauthenticated) or
+with a valid cert.
+
+### Client configuration
+
+All external clients read `ACTIVITY_MONITOR_URL` (see `plugins/README.md`).
+
+For HTTPS without client cert:
+- **curl**: `curl -k https://localhost:8001/...` for self-signed; if CA is trusted, omit `-k`.
+- **httpx** (Python clients): set `verify` to CA path or `True` if system-trusted.
+- **Node fetch** (opencode plugins): works if CA is trusted; for private CA set `NODE_EXTRA_CA_CERTS=certs/ca.crt`.
+
+For mTLS (client cert required):
+- **curl**: `curl --cert certs/client.crt --key certs/client.key https://localhost:8001/...`
+- **httpx**: `httpx.AsyncClient(verify="certs/ca.crt", cert=("certs/client.crt", "certs/client.key"))`
+- **Node fetch**: provide a custom HTTPS agent with `ca`, `cert`, `key` (e.g. using `undici` or `https` module).
+- **Browser**: import client cert (`client.p12`) and CA if needed; browser will prompt when connecting.
+
+**Security note:** The `certs/` directory contains private keys. Do not commit private
+keys to version control. The example above uses `certs/` which is gitignored in typical
+setups; only commit `certs/*.crt` if needed, never `.key` or `.p12`.
 
 ## Sources
 
-Sources are pluggable and deliberately agnostic about how data is obtained. Every source has a
-`kind` and is either **pull** (the server fetches on demand) or **push** (an external client posts
-events).
-
-| Kind | Shape | What it reads |
-| --- | --- | --- |
-| `BashHistory` | pull | A shell history file (understands `#<epoch>` timestamp lines) |
-| `GitHistory` | pull | `git log` of the configured repositories |
-| `Push` | push | Anything that POSTs to the ingest endpoint (e.g. an opencode plugin) |
-
-Add, remove, or disable sources under `sources:` in `config.yaml`. New kinds are added by
-subclassing `SourceProvider` in `activity_monitor/sources.py` and registering it in `PROVIDERS`.
-
-Desktop activity is collected by a companion push watcher (`activity_monitor/windows_watcher.py`):
-run standalone it POSTs what you are looking at to the `windows` Push source, or embed it in the
-backend (`--watch-windows`) to write straight to the database (see below).
-
-### Ingest (push)
-
-```bash
-curl -X POST http://localhost:8001/api/ingest/opencode \
-  -H "Content-Type: application/json" \
-  -d '{"events": [
-    {"id": "abc", "kind": "tool_call", "actor": "agent-a",
-     "task": "feature-x", "timestamp": "2026-10-10T09:00:00",
-     "title": "edited main.py", "tags": ["edit"]}
-  ]}'
-```
-
-Fields: `timestamp` (ISO-8601 or epoch), `kind`, `actor`, `task`, `title`, `detail`,
-`duration_ms`, `tags`, and any extra keys (kept under `data`). An `id` makes ingestion
-idempotent; without one, a stable hash of the payload is used. Unknown sources return `404`,
-pull sources cannot be pushed to.
-
-### Fetch (pull)
-
-`POST /api/sources/{name}/fetch` asks a pull source for data and stores what is new.
-
-### Tasks (grouping keys)
-
-A task is a key used to group events together — for example a Jira id. Each source decides how an
-event's `task` is set:
-
-- **git** — set `TASK_PATTERN` in the backend's environment to a regular expression (e.g.
-  `JIRA-[0-9]+`). The git source (`GitHistorySource.parse`) searches the **commit subject first,
-  then the branch**, and uses the first match as the task; when nothing matches it falls back to
-  the repository name.
-- **windows** — the foreground process name (the `focus` `task`).
-- **opencode** — the project directory by default, overridable per session with the `/task`
-  command (below).
-
-`GET /api/tasks/summary` groups events by task.
-
-## API
-
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /api/sources` | Configured sources |
-| `POST /api/sources/{name}/fetch` | Pull and store from a pull source |
-| `POST /api/ingest/{name}` | Push one or many raw events |
-| `GET /api/timelines/agentic` | Events grouped into per-actor lanes (`start`, `end`, `actor`) |
-| `GET /api/timelines/presence` | Program lanes with `active`/`idle`/`closed` state segments + events |
-| `GET /api/timelines/user` | Desktop activity: focus lanes per process + idle/locked intervals |
-| `GET /api/timelines/code` | `git` `commit`/`push` events in range (passive code line) |
-| `POST /api/programs/start` | Register a running program (`program_id`, `source`, `host`) |
-| `POST /api/programs/beat` | Heartbeat, keeps the program alive |
-| `POST /api/programs/end` | Close a program |
-| `GET /api/tasks` | Filtered events (`q`, `source`, `actor`, `kind`, `task`, `start`, `end`, `limit`) |
-| `GET /api/tasks/summary` | Task list with counts and time span |
-| `GET /api/actors`, `GET /api/kinds` | Filter options |
-| `GET /api/stats` | Totals |
-
-Lane numbers (`parallel_id`) are assigned at query time: per `(source, host)`, programs are laid
-out greedily so that overlapping runs never share a lane and a re-started program reuses the
-lowest free lane. A program whose heartbeat went silent for `general.stale_after_seconds`
-(default 300) is treated as closed. All timestamps are stored and compared in UTC, so clients
-should send ISO-8601 timestamps with a timezone (e.g. `…Z`).
-
-## Architecture
-
-Deliberately small: no services framework, no thread pool, no pipeline engine (the only background
-thread is the optional embedded desktop watcher).
-
-```
-activity_monitor/
-  main.py      FastAPI app, CLI, lifespan (init DB, build sources), serves frontend/dist
-  config.py    yaml -> AppConfig (plain dataclass)
-  db.py        async SQLite engine + session factory
-  models.py    ActivityEvent (SQLModel) + API response models
-  sources.py   SourceProvider base + BashHistory/GitHistory/Push providers + registry
-  api.py       all endpoints
-  windows_watcher.py   desktop focus/idle/lock watcher (ctypes): standalone HTTP or embedded DB sink
-plugins/opencode-activity.ts   opencode plugin reporting program lifecycle + prompts
-plugins/post-commit            git hook registering branch + commit id to /api/ingest/git
-plugins/pre-push               git hook registering pushes (remote + branch + commit id)
-supervisor.py   restarts the backend on exit
-```
-
-The UI is a Vite + React 19 + MUI app (`frontend/`) whose API types are generated from the
-backend's OpenAPI schema with `openapi-typescript`.
-
-## Install & run
-
-```bash
-python -m activity_monitor.main                        # http://localhost:8001
-python -m activity_monitor.main --config config.yaml --database activity.db --port 8001
-python -m activity_monitor.main --watch-windows        # backend + embedded desktop watcher
-python supervisor.py                                   # restarts the backend on exit
-python -m activity_monitor.windows_watcher             # standalone: pushes desktop focus/idle/lock
-```
-
-### From source
-
-```bash
-cd frontend && npm install && npm run build   # build the web UI once
-python supervisor.py                          # from the repo root
-```
-
-### opencode plugin
-
-`plugins/opencode-activity.ts` is an opencode plugin that reports the opencode process itself as a
-**program** and records activity against it:
-
-- On load it announces the process via `POST /api/programs/start` with `program_id` = the OS PID
-  (or an explicit `programId` option) and `host` = machine hostname. The backend tracks it as a
-  running program and lays it out on a presence lane.
-- It sends a heartbeat (`POST /api/programs/beat`) every `heartbeatMs` (60s) and closes the
-  program (`POST /api/programs/end`) when opencode exits (the `dispose` hook).
-- Each prompt is recorded as a `prompt.begin` event (the prompt is stored in `detail`) and a
-  `prompt.end` event once the turn finishes (with `duration_ms` and a `completed`/`error` status).
-  Both carry a top-level `program: { id, source, host }`, which is how the presence timeline
-  pins events to a lane.
-
-Event ids are deterministic SHA-1 hashes of `prompt · begin|end · sessionID · messageID`, so the
-backend dedupes re-sends — the same prompt is never recorded twice.
-
-The custom command `/task <id>` (declared in `opencode.json`) pins a session to a task: the plugin
-records a `task.set` event and tags subsequent `prompt.begin`/`prompt.end` events with the id
-(`/task` by itself clears it). It intercepts the command **before** the model runs, so `/task`
-never produces an assistant turn.
-
-It is enabled via the repo's `opencode.json` and posts to `POST /api/ingest/opencode`
-(the `opencode` push source in `config.yaml`). Configure with plugin options or env vars:
-
-| Option / env | Default |
-| --- | --- |
-| `baseUrl` / `ACTIVITY_MONITOR_BASE_URL` | `http://localhost:$ACTIVITY_MONITOR_PORT` |
-| `ACTIVITY_MONITOR_PORT` | `8001` (builds the default base URL) |
-| `source` / `ACTIVITY_MONITOR_SOURCE` | `opencode` |
-| `actor` / `ACTIVITY_MONITOR_ACTOR` | `$USER`/`$USERNAME` |
-| `truncate` | `120` |
-| `programId` | the current process PID |
-| `heartbeatMs` | `60000` |
-
-Restart opencode after changing the plugin.
-
-### Windows watcher
-
-`activity_monitor/windows_watcher.py` is a small, dependency-free (`ctypes` only) foreground
-watcher: every `--poll` seconds it samples the foreground window (`GetForegroundWindow` + process
-image), the input-idle time (`GetLastInputInfo`) and the input desktop (`OpenInputDesktop`), and
-reports transition events to the `windows` Push source in `config.yaml`:
-
-| Event | When |
-| --- | --- |
-| `focus` | Foreground window (title + process) changes; the previous window's span is closed with its `duration_ms` |
-| `idle.start` | No keyboard/mouse input for `--idle-minutes`; timestamp backdated to the true last-input moment |
-| `idle.end` | Input resumes; `duration_ms` is the idle span |
-| `lock` / `unlock` | Workstation locked/unlocked (`unlock` carries the lock span's `duration_ms`) |
-
-It runs in two modes:
-
-- **Standalone** — its own process, POSTing each event to the backend ingest endpoint. It targets
-  `http://127.0.0.1:$ACTIVITY_MONITOR_PORT` (default `8001`), so one env var configures it:
-  ```bash
-  python -m activity_monitor.windows_watcher                                  # base from ACTIVITY_MONITOR_PORT, poll 1s, idle after 2m
-  python -m activity_monitor.windows_watcher --base-url http://localhost:8001 --poll 1.0 --idle-minutes 2.0
-  ```
-- **Embedded** — started by the backend (`python -m activity_monitor.main --watch-windows`, or
-  `general.watch_windows: true` in `config.yaml`), it runs in-process and writes events straight to
-  the database, so no ingest request is needed. Per-source options (`poll`, `idle_minutes`,
-  `actor`, `verbose`) can be set under `sources.windows`.
-
-Each event carries a unique `id`, so restarts and retries dedupe on the server. Lock events cannot
-be exercised from a test run (it watches your real desktop), but focus/idle transitions are logged
-to stdout with `--verbose`. Restart the watcher after editing it.
-
-### Git hooks
-
-Two hooks report git activity to `POST /api/ingest/git`, each reading `ACTIVITY_MONITOR_PORT` and
-never blocking the operation:
-
-- `plugins/post-commit` registers each **commit** — at least the **current branch** and **commit
-  id** (plus repository, author, timestamp and subject).
-- `plugins/pre-push` registers each **push** as a distinct `push` event — remote, branch, commit id
-  and the previous (remote) sha.
-
-Install them with `git config core.hooksPath <repo>/plugins` (or copy/symlink into `.git/hooks`).
-The backend derives each git event's task from `TASK_PATTERN` (commit subject first, then branch).
-See `plugins/README.md` for all client setup.
-
-## Development
-
-```bash
-ruff check . && ruff format .                 # backend
-python -m pytest                              # tests
-cd frontend && npm run lint && npm run build  # frontend
-
-# regenerate API types after changing endpoints
-python -m activity_monitor.main --openapi openapi_local.json
-cd frontend && npx openapi-typescript ../openapi_local.json -o src/api/generated/schema.ts
-```
+Sources are configured in `config.yaml` under `sources`. Each has a `type` and optional
+parameters. The backend polls pull sources on demand via the API or you can push events
+to the ingest endpoints.

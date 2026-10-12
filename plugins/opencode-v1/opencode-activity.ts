@@ -47,7 +47,7 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     const port = envVar("ACTIVITY_MONITOR_PORT") ?? "8001";
 
     const opts: Options = {
-        baseUrl: envVar("ACTIVITY_MONITOR_BASE_URL") ?? `http://localhost:${port}`,
+        baseUrl: envVar("ACTIVITY_MONITOR_URL") ?? envVar("ACTIVITY_MONITOR_BASE_URL") ?? `http://localhost:${port}`,
         source: envVar("ACTIVITY_MONITOR_SOURCE") ?? "opencode",
         actor: defaultActor(),
         truncate: 120,

@@ -8,7 +8,7 @@
 # so the timeline can tell pushes apart from commits.
 #
 # Install, from the repository you want to watch:
-#   git config core.hooksPath /absolute/path/to/activity_monitor/plugins
+#   git config core.hooksPath /absolute/path/to/activity_monitor/plugins/git
 # or copy/symlink this file into .git/hooks/pre-push and make it executable.
 #
 # The backend port comes from ACTIVITY_MONITOR_PORT (default 8001), the same
@@ -16,7 +16,7 @@
 #
 # The hook never blocks a push: if the monitor is unreachable it exits 0.
 
-PORT="${ACTIVITY_MONITOR_PORT:-8001}"
+URL_BASE="${ACTIVITY_MONITOR_URL:-http://127.0.0.1:8001}"
 
 command -v curl >/dev/null 2>&1 || exit 0
 
@@ -76,7 +76,7 @@ done
 payload=$(printf '{"events":[%s]}' "$events")
 
 curl -sS -m 2 -o /dev/null \
-    -X POST "http://127.0.0.1:${PORT}/api/ingest/git" \
+    -X POST "${URL_BASE}/api/ingest/git" \
     -H "Content-Type: application/json" \
     --data "$payload" || true
 

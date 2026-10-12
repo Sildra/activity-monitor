@@ -7,57 +7,82 @@ at your server.
 
 | Variable | Default | Used by |
 | --- | --- | --- |
-| `ACTIVITY_MONITOR_PORT` | `8001` | all clients below |
-| `ACTIVITY_MONITOR_BASE_URL` | `http://localhost:$ACTIVITY_MONITOR_PORT` | opencode plugin (overrides the port) |
+| `ACTIVITY_MONITOR_URL` | `http://127.0.0.1:8001` | all clients below |
+| `ACTIVITY_MONITOR_PORT` | `8001` | legacy fallback for watcher/hooks (if URL not set) |
+| `ACTIVITY_MONITOR_HOST` | `127.0.0.1` | legacy fallback |
+| `ACTIVITY_MONITOR_BASE_URL` | `http://localhost:$ACTIVITY_MONITOR_PORT` | legacy fallback for opencode plugins |
 | `ACTIVITY_MONITOR_SOURCE` | `opencode` | opencode plugin |
 | `ACTIVITY_MONITOR_ACTOR` | `$USER` / `$USERNAME` | opencode plugin |
 
-The backend must be running, and its `general.api_port` (see `config.yaml`) should
-match `ACTIVITY_MONITOR_PORT`. If you change one, change the other.
+The backend must be running and accessible at the URL configured via
+`ACTIVITY_MONITOR_URL` (or legacy variables if still used). For HTTPS/mTLS,
+see the main README.
 
 Set the variable for the session (or persist it):
 
 ```powershell
-$env:ACTIVITY_MONITOR_PORT = "8001"   # PowerShell
+$env:ACTIVITY_MONITOR_URL = "https://localhost:8001"   # PowerShell
 ```
 
 ```bat
-set ACTIVITY_MONITOR_PORT=8001        & rem cmd.exe
+set ACTIVITY_MONITOR_URL=https://localhost:8001        & rem cmd.exe
 ```
 
 ## OpenCode
 
-`opencode-activity.ts` reports the opencode process itself as a **program** and
-records prompts against it (see the main `README.md` for the full event list).
+Two versions of the opencode plugin report the opencode process itself as a
+**program** and record prompts against it (see the main `README.md` for the full
+event list):
 
-Enable it by adding the plugin to an `opencode.json` — this repo already ships
-one:
+- **`opencode-v2/`** — the current plugin, for OpenCode 2 (loaded as a local
+  plugin directory; the entry point is `index.ts`). It is built on the V2 plugin
+  API (`@opencode/plugin`).
+- **`opencode-v1/opencode-activity.ts`** — the legacy plugin for OpenCode 1
+  (`@opencode-ai/plugin`). V1 plugin implementations do not run on OpenCode 2.
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["./plugins/opencode-activity.ts"]
-}
-```
-
-To use it from anywhere, point the path at this file (absolute path recommended):
+This repo ships an `opencode.json` that enables the V2 plugin:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["C:/path/to/activity_monitor/plugins/opencode-activity.ts"]
+  "plugins": ["./plugins/opencode-v2"]
 }
 ```
 
-Make sure `ACTIVITY_MONITOR_PORT` is set before opencode starts, then **restart
-opencode** whenever the plugin changes. The plugin posts to
-`POST /api/ingest/opencode` and registers its heartbeat via
-`POST /api/programs/start|beat|end`.
+To use it from anywhere, point the path at this directory (absolute path
+recommended):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["C:/path/to/activity_monitor/plugins/opencode-v2"]
+}
+```
+
+Make sure `ACTIVITY_MONITOR_URL` (or legacy `ACTIVITY_MONITOR_PORT`/`ACTIVITY_MONITOR_BASE_URL`)
+is set before opencode starts, then **restart opencode** whenever the plugin changes.
+The plugin posts to `POST /api/ingest/opencode` and registers its heartbeat via
+`POST /api/programs/start|beat|end`. For mTLS, configure client certificates via
+environment variables appropriate to your Node setup (`NODE_EXTRA_CA_CERTS`,
+or use a custom agent via plugin options if needed).
 
 Run `/task <id>` (e.g. `/task JIRA-123`) to pin the session to a task: the plugin
 records a `task.set` event and tags subsequent `prompt.begin`/`prompt.end` events
-with that id (`/task` by itself clears it). The command is intercepted before the
-model runs, so it never produces an assistant turn.
+with that id (`/task` by itself clears it). The V2 plugin registers `/task` as a
+real command whose executor does not submit a prompt, so the model never runs
+(the V1 plugin achieved the same by intercepting and aborting the command).
+
+V2 implementation notes:
+
+- `prompt.begin` is recorded in the `ctx.session.hook("prompt", ...)` hook (it
+  runs on incoming prompts; `messageID` is available for the dedupe id).
+- `prompt.end` is recorded from the `session.idle` event on
+  `ctx.event.subscribe(...)`. V2 has no `session.error` event, so a finished
+  prompt always reports status `completed`.
+- V2 has no server-side toast API, so plugin errors only reach opencode's logs.
+- The plugin folder pins `@opencode/plugin` in `package.json` so editors can
+  type-check it (`npm install` in the folder); the runtime resolves the package
+  itself.
 
 ## Standalone Windows monitor
 
@@ -66,17 +91,18 @@ time and lock state, and pushes `focus` / `idle.start` / `idle.end` / `lock` /
 `unlock` events to the `windows` Push source. It is `ctypes`-only (no extra
 dependencies) and windows-only.
 
-With `ACTIVITY_MONITOR_PORT` set, just run it from the repo root:
+Set `ACTIVITY_MONITOR_URL` (or legacy vars) and run it from the repo root:
 
 ```bash
+$env:ACTIVITY_MONITOR_URL="https://localhost:8001"
 python -m activity_monitor.windows_watcher
 ```
 
-It defaults to `http://127.0.0.1:$ACTIVITY_MONITOR_PORT`. Override per run if
+It defaults to `http://127.0.0.1:8001` if no URL is set. Override per run if
 needed:
 
 ```bash
-python -m activity_monitor.windows_watcher --base-url http://127.0.0.1:8001 --poll 1.0 --idle-minutes 2.0 --verbose
+python -m activity_monitor.windows_watcher --base-url https://localhost:8001 --poll 1.0 --idle-minutes 2.0 --verbose
 ```
 
 Alternatively, run it **inside** the backend (`python -m activity_monitor.main
@@ -94,17 +120,19 @@ and both always exiting `0`, so a stopped monitor never blocks a commit or push.
 - **`pre-push`** — on every `git push`, registers each pushed ref as a distinct
   `push` event with the **remote**, **branch**, **commit id** and the previous
   (remote) sha. Git has no post-push hook, so it runs just before the transfer;
-  ref deletions and no-op pushes are ignored.
+  ref deletions and no-op pushes are ignored. For HTTPS with self-signed certs or mTLS,
+  pass `-k` (insecure) to curl or ensure CA/client certs are configured in the shell
+  environment. The hooks use `curl` and respect `ACTIVITY_MONITOR_URL`.
 
 Install both for any repository you want to track:
 
 ```bash
 # point git at this folder (it runs any hook named like post-commit/pre-push)
-git config core.hooksPath /absolute/path/to/activity_monitor/plugins
+git config core.hooksPath /absolute/path/to/activity_monitor/plugins/git
 
 # ...or copy/symlink individual hooks
-cp plugins/post-commit .git/hooks/post-commit
-cp plugins/pre-push .git/hooks/pre-push
+cp plugins/git/post-commit .git/hooks/post-commit
+cp plugins/git/pre-push .git/hooks/pre-push
 chmod +x .git/hooks/post-commit .git/hooks/pre-push
 ```
 

@@ -27,6 +27,11 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Run the desktop watcher in-process, writing events straight to the database",
     )
+    parser.add_argument("--ssl", action="store_true", help="Enable HTTPS")
+    parser.add_argument("--ssl-certfile", type=Path, default=None, help="Path to SSL certificate file")
+    parser.add_argument("--ssl-keyfile", type=Path, default=None, help="Path to SSL private key file")
+    parser.add_argument("--ssl-ca-certs", type=Path, default=None, help="Path to CA certificate for client auth")
+    parser.add_argument("--ssl-cert-reqs", default=None, help="Client cert requirement: none|optional|required")
     return parser.parse_args()
 
 
@@ -43,6 +48,17 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
     if getattr(args, "watch_windows", False):
         config.watch_windows = True
+
+    if getattr(args, "ssl", False):
+        config.ssl_enabled = True
+    if args.ssl_certfile is not None:
+        config.ssl_certfile = str(args.ssl_certfile)
+    if args.ssl_keyfile is not None:
+        config.ssl_keyfile = str(args.ssl_keyfile)
+    if getattr(args, "ssl_ca_certs", None) is not None:
+        config.ssl_ca_certs = str(args.ssl_ca_certs)
+    if args.ssl_cert_reqs is not None:
+        config.ssl_cert_reqs = args.ssl_cert_reqs
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -115,14 +131,37 @@ def main() -> None:
     }
     log_config = {**log_config, "formatters": formatters}
 
-    config = uvicorn.Config(
-        app, host="0.0.0.0", port=app.state.config.api_port, timeout_graceful_shutdown=5, log_config=log_config
-    )
+    cfg = app.state.config
+    config_kwargs: dict = {
+        "app": app,
+        "host": "0.0.0.0",
+        "port": cfg.api_port,
+        "timeout_graceful_shutdown": 5,
+        "log_config": log_config,
+    }
+    if cfg.ssl_enabled:
+        if not cfg.ssl_certfile or not cfg.ssl_keyfile:
+            raise SystemExit("SSL enabled but ssl_certfile and ssl_keyfile are required")
+        import ssl
+
+        config_kwargs["ssl_certfile"] = cfg.ssl_certfile
+        config_kwargs["ssl_keyfile"] = cfg.ssl_keyfile
+        if cfg.ssl_ca_certs:
+            config_kwargs["ssl_ca_certs"] = cfg.ssl_ca_certs
+        req = str(cfg.ssl_cert_reqs).lower()
+        config_kwargs["ssl_cert_reqs"] = {
+            "none": ssl.CERT_NONE,
+            "optional": ssl.CERT_OPTIONAL,
+            "required": ssl.CERT_REQUIRED,
+        }.get(req, ssl.CERT_NONE)
+
+    config = uvicorn.Config(**config_kwargs)
     config.load_app()
     server = uvicorn.Server(config)
 
-    get_logger().info("Activity Monitor: http://localhost:%s", config.port)
-    get_logger().info("Swagger:          http://localhost:%s/docs", config.port)
+    scheme = "https" if cfg.ssl_enabled else "http"
+    get_logger().info("Activity Monitor: %s://localhost:%s", scheme, config.port)
+    get_logger().info("Swagger:          %s://localhost:%s/docs", scheme, config.port)
 
     try:
         server.run()

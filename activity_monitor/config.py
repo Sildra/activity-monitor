@@ -29,6 +29,11 @@ class AppConfig:
     sources: dict[str, dict[str, Any]] = field(default_factory=dict)
     pipelines: list[dict[str, Any]] = field(default_factory=list)
     scanners: dict[str, dict[str, Any]] = field(default_factory=dict)
+    ssl_enabled: bool = False
+    ssl_certfile: str | None = None
+    ssl_keyfile: str | None = None
+    ssl_ca_certs: str | None = None
+    ssl_cert_reqs: str = "none"  # none|optional|required
 
     @classmethod
     def load(cls, path: Path) -> AppConfig:
@@ -49,6 +54,11 @@ class AppConfig:
             session_gap_minutes=int(session.get("gap_minutes", DEFAULT_SESSION_GAP_MINUTES)),
             stale_after_seconds=int(general.get("stale_after_seconds", DEFAULT_STALE_AFTER_SECONDS)),
             watch_windows=bool(general.get("watch_windows", False)),
+            ssl_enabled=bool(general.get("ssl_enabled", False)),
+            ssl_certfile=general.get("ssl_certfile"),
+            ssl_keyfile=general.get("ssl_keyfile"),
+            ssl_ca_certs=general.get("ssl_ca_certs"),
+            ssl_cert_reqs=str(general.get("ssl_cert_reqs", "none")),
             sources=dict(data.get("sources") or {}),
             pipelines=list(data.get("pipelines") or []),
             scanners=dict(data.get("scanners") or {}),

@@ -84,14 +84,9 @@ DEFAULT_PORT = "8001"
 
 
 def default_base_url() -> str:
-    """Backend root for the standalone watcher.
-
-    The port comes from ACTIVITY_MONITOR_PORT so the watcher, the opencode plugin
-    and the git hook all follow one setting.
-    """
-    port = os.environ.get("ACTIVITY_MONITOR_PORT") or DEFAULT_PORT
-
-    return f"http://127.0.0.1:{port}"
+    """Backend root for the standalone watcher."""
+    url = os.environ.get("ACTIVITY_MONITOR_URL") or "http://127.0.0.1:8001"
+    return url.rstrip("/")
 
 
 def idle_millis() -> int:
