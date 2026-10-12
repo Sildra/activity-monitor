@@ -36,6 +36,9 @@ const getPid = (): string => {
 const defaultActor = (): string =>
     envVar("ACTIVITY_MONITOR_ACTOR") ?? envVar("USER") ?? envVar("USERNAME") ?? "opencode";
 
+const envShadow = (): boolean =>
+    ["1", "true", "yes", "on"].includes((envVar("ACTIVITY_MONITOR_SHADOW") ?? "").toLowerCase());
+
 const stableId = (...parts: string[]): string => createHash("sha1").update(parts.join("\u001f")).digest("hex");
 
 const firstTask = (text: string, max: number): string => {
@@ -129,6 +132,8 @@ export default Plugin.define({
         const directory = ctx.location.directory;
         const pending = new Map<string, Pending>();
         const sessionTasks = new Map<string, string>();
+        const shadowSessions = new Set<string>();
+        const shadowAll = envShadow();
 
         let lastError = "";
 
@@ -145,6 +150,10 @@ export default Plugin.define({
             (sessionID !== undefined ? sessionTasks.get(sessionID) : undefined) ?? projectName(directory);
 
         const post = async (path: string, body: unknown, attempts = 1, backoffMs = 750): Promise<boolean> => {
+            if (shadowAll) {
+                return true;
+            }
+
             let failure = "";
 
             for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -229,9 +238,19 @@ export default Plugin.define({
         })();
 
         await ctx.session.hook("prompt", async (event) => {
-            const text = event.prompt.text.trim();
+            // `/shadow <prompt>` (or the global ACTIVITY_MONITOR_SHADOW) runs the prompt
+            // normally but is never reported. The prefix is stripped so the model still
+            // receives the real text when the command executor did not already strip it.
+            const prefix = /^\s*\/shadow\b\s*/i.exec(event.prompt.text);
 
-            if (!text) {
+            if (prefix) {
+                event.prompt.text = event.prompt.text.slice(prefix[0].length);
+            }
+
+            const text = event.prompt.text.trim();
+            const turnShadowed = shadowSessions.delete(event.sessionID);
+
+            if (!text || shadowAll || prefix !== null || turnShadowed) {
                 return;
             }
 
@@ -306,6 +325,34 @@ export default Plugin.define({
                         data: { sessionID: input.sessionID },
                         program: programEvents(),
                     });
+                },
+            });
+
+            // /shadow <prompt> submits the prompt normally but marks the session so the
+            // prompt hook skips reporting for that turn (a per-turn ACTIVITY_MONITOR_SHADOW).
+            editor.add({
+                name: "shadow",
+                description: "Send a prompt without reporting it to the Activity Monitor",
+                execute: async (input) => {
+                    const text = input.prompt.text.replace(/^\s*\/shadow\b\s*/i, "").trim();
+
+                    if (!text) {
+                        return;
+                    }
+
+                    shadowSessions.add(input.sessionID);
+
+                    // Safety net: if the prompt hook never consumes the marker, drop it so a
+                    // later prompt in this session is not silently shadowed.
+                    const cleanup = setTimeout(() => shadowSessions.delete(input.sessionID), 30_000);
+                    cleanup.unref?.();
+
+                    try {
+                        await ctx.session.prompt({ sessionID: input.sessionID, text });
+                    } catch (error) {
+                        shadowSessions.delete(input.sessionID);
+                        report(`shadow prompt failed: ${(error as Error).message}`);
+                    }
                 },
             });
         });

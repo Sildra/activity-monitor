@@ -13,6 +13,7 @@ at your server.
 | `ACTIVITY_MONITOR_BASE_URL` | `http://localhost:$ACTIVITY_MONITOR_PORT` | legacy fallback for opencode plugins |
 | `ACTIVITY_MONITOR_SOURCE` | `opencode` | opencode plugin |
 | `ACTIVITY_MONITOR_ACTOR` | `$USER` / `$USERNAME` | opencode plugin |
+| `ACTIVITY_MONITOR_SHADOW` | — | opencode plugin (silent mode, `1`/`true`/`yes`/`on`) |
 | `ACTIVITY_MONITOR_CA_CERT` | — | all clients (verify server, private CA) |
 | `ACTIVITY_MONITOR_CLIENT_CERT` | — | all clients (mTLS client certificate) |
 | `ACTIVITY_MONITOR_CLIENT_KEY` | — | all clients (mTLS client key) |
@@ -84,15 +85,26 @@ recommended):
 Make sure `ACTIVITY_MONITOR_URL` (or legacy `ACTIVITY_MONITOR_PORT`/`ACTIVITY_MONITOR_BASE_URL`)
 is set before opencode starts, then **restart opencode** whenever the plugin changes.
 The plugin posts to `POST /api/ingest/opencode` and registers its heartbeat via
-`POST /api/programs/start|beat|end`. For mTLS, configure client certificates via
-environment variables appropriate to your Node setup (`NODE_EXTRA_CA_CERTS`,
-or use a custom agent via plugin options if needed).
+`POST /api/programs/start|beat|end`. For mTLS, configure the client certificates
+with the shared `ACTIVITY_MONITOR_CA_CERT` / `ACTIVITY_MONITOR_CLIENT_CERT` /
+`ACTIVITY_MONITOR_CLIENT_KEY` variables (the plugins pass them to `node:https`).
 
 Run `/task <id>` (e.g. `/task JIRA-123`) to pin the session to a task: the plugin
 records a `task.set` event and tags subsequent `prompt.begin`/`prompt.end` events
 with that id (`/task` by itself clears it). The V2 plugin registers `/task` as a
 real command whose executor does not submit a prompt, so the model never runs
 (the V1 plugin achieved the same by intercepting and aborting the command).
+
+Run `/shadow <prompt>` to send one prompt without reporting it to the Activity
+Monitor: the prompt still runs, but no `prompt.begin`/`prompt.end` (or any other)
+event is sent for that turn. The plugin strips the `/shadow` prefix in the prompt
+hook (V2) or message hook (V1), so the model receives the real text.
+
+Set `ACTIVITY_MONITOR_SHADOW=1` (also `true`/`yes`/`on`) to do the same for the
+whole session: the plugin becomes completely silent and sends nothing to the
+Activity Monitor (no program lifecycle, no prompts). The option is read when
+opencode starts, so restart opencode after changing it. This is a process-wide
+kill switch; `/shadow` only affects the single prompt it precedes.
 
 V2 implementation notes:
 

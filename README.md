@@ -192,6 +192,10 @@ The clients apply these directly:
 
 For a browser-only session (no client cert), simply trust `certs/ca.crt`.
 
+The opencode plugins also support a silent mode: `ACTIVITY_MONITOR_SHADOW=1` sends nothing to
+the monitor, and `/shadow <prompt>` skips reporting for a single prompt (see
+`plugins/README.md`).
+
 **Security note:** The `certs/` directory contains private keys. Do not commit private
 keys to version control. The example above uses `certs/` which is gitignored in typical
 setups; only commit `certs/*.crt` if needed, never `.key` or `.p12`.

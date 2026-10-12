@@ -36,6 +36,9 @@ const getPid = (): string => {
 const defaultActor = (): string =>
     envVar("ACTIVITY_MONITOR_ACTOR") ?? envVar("USER") ?? envVar("USERNAME") ?? "opencode";
 
+const envShadow = (): boolean =>
+    ["1", "true", "yes", "on"].includes((envVar("ACTIVITY_MONITOR_SHADOW") ?? "").toLowerCase());
+
 const stableId = (...parts: string[]): string => createHash("sha1").update(parts.join("\u001f")).digest("hex");
 
 const firstTask = (text: string, max: number): string => {
@@ -126,6 +129,8 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     const host = hostname();
     const pending = new Map<string, Pending>();
     const sessionTasks = new Map<string, string>();
+    const shadowSessions = new Set<string>();
+    const shadowAll = envShadow();
 
     let lastError = "";
 
@@ -148,6 +153,10 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
         (sessionID !== undefined ? sessionTasks.get(sessionID) : undefined) ?? projectName(directory);
 
     const post = async (path: string, body: unknown, attempts = 1, backoffMs = 750): Promise<boolean> => {
+        if (shadowAll) {
+            return true;
+        }
+
         let failure = "";
 
         for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -195,7 +204,25 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
 
     return {
         "command.execute.before": async (input) => {
-            if (input.command.replace(/^\//, "") !== "task") {
+            const command = input.command.replace(/^\//, "");
+
+            // /shadow <prompt>: run the prompt but mark the session so chat.message
+            // skips reporting for that turn (a per-turn ACTIVITY_MONITOR_SHADOW).
+            // Unlike /task this does not throw, so the command proceeds normally.
+            if (command === "shadow") {
+                if (input.arguments.trim()) {
+                    shadowSessions.add(input.sessionID);
+
+                    // Safety net: if chat.message never consumes the marker, drop it so a
+                    // later prompt in this session is not silently shadowed.
+                    const cleanup = setTimeout(() => shadowSessions.delete(input.sessionID), 30_000);
+                    cleanup.unref?.();
+                }
+
+                return;
+            }
+
+            if (command !== "task") {
                 return;
             }
 
@@ -226,6 +253,14 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
             throw new Error("activity-monitor: task command handled");
         },
         "chat.message": async (input, output) => {
+            // A `/shadow <prompt>` prefix (when it reaches the message hook) is stripped
+            // so the model receives the real text; the turn is still not reported.
+            const prefixPart = output.parts.find((part) => part.type === "text" && /^\s*\/shadow\b\s*/i.test(part.text));
+
+            if (prefixPart !== undefined) {
+                prefixPart.text = prefixPart.text.replace(/^\s*\/shadow\b\s*/i, "");
+            }
+
             const text = output.parts
                 .filter((part) => part.type === "text")
                 .map((part) => part.text)
@@ -233,6 +268,12 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
                 .trim();
 
             if (!text) {
+                return;
+            }
+
+            const turnShadowed = shadowSessions.delete(input.sessionID);
+
+            if (shadowAll || prefixPart !== undefined || turnShadowed) {
                 return;
             }
 
