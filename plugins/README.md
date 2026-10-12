@@ -115,6 +115,14 @@ block, and the lane shows the events as `?` / `✓` / `✗`. Auto-approved calls
 actually need your attention. Both `/shadow` and `ACTIVITY_MONITOR_SHADOW`
 suppress permission events too.
 
+When the model asks you a question (the built-in `question` tool), the plugin
+reports that wait the same way: `question.asked` while the question is on screen
+and `question.replied` when it is settled (`data.status` is `answered` or
+`dismissed`, with the wait in `duration_ms`). The timeline renders it as the same
+hatched `waiting` block and shows the event as `?` / `✓` / `✗`. Questions are a
+V2 feature (the tool is backed by a form), so the V1 plugin does not emit these;
+both shadow mechanisms suppress them too.
+
 V2 implementation notes:
 
 - `prompt.begin` is recorded in the `ctx.session.hook("prompt", ...)` hook (it
@@ -125,6 +133,10 @@ V2 implementation notes:
 - `permission.asked` / `permission.replied` come from the same
   `ctx.event.subscribe(...)` stream; the ask is paired to its reply by request id
   to compute the wait duration.
+- `question.asked` / `question.replied` come from the `form.created`,
+  `form.replied` and `form.cancelled` events on the same stream; the question
+  tool tags its form with `metadata.kind === "question"`, so unrelated forms are
+  ignored, and replies are paired to the ask by form id.
 - V2 has no server-side toast API, so plugin errors only reach opencode's logs.
 - The plugin folder pins `@opencode/plugin` in `package.json` so editors can
   type-check it (`npm install` in the folder); the runtime resolves the package

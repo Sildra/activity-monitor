@@ -359,19 +359,31 @@ function RowLabel({ label, detail }: { label: string; detail: string }) {
     );
 }
 
-const PERMISSION_COLORS = { asked: "#f59e0b", approved: "#22c55e", denied: "#ef4444" };
+const ATTENTION_COLORS = { asked: "#f59e0b", approved: "#22c55e", denied: "#ef4444", question: "#8b5cf6" };
 
-function permissionMark(event: UnifiedTimelineEvent): { glyph: string; color: string; label: string } | null {
+function attentionMark(event: UnifiedTimelineEvent): { glyph: string; color: string; label: string } | null {
     if (event.kind === "permission.asked") {
-        return { glyph: "?", color: PERMISSION_COLORS.asked, label: "Permission requested" };
+        return { glyph: "?", color: ATTENTION_COLORS.asked, label: "Permission requested" };
     }
 
     if (event.kind === "permission.replied") {
         const denied = event.data?.status === "denied" || event.data?.reply === "reject";
 
         return denied
-            ? { glyph: "\u2717", color: PERMISSION_COLORS.denied, label: "Permission denied" }
-            : { glyph: "\u2713", color: PERMISSION_COLORS.approved, label: "Permission approved" };
+            ? { glyph: "\u2717", color: ATTENTION_COLORS.denied, label: "Permission denied" }
+            : { glyph: "\u2713", color: ATTENTION_COLORS.approved, label: "Permission approved" };
+    }
+
+    if (event.kind === "question.asked") {
+        return { glyph: "?", color: ATTENTION_COLORS.question, label: "Question asked" };
+    }
+
+    if (event.kind === "question.replied") {
+        const dismissed = event.data?.status === "dismissed";
+
+        return dismissed
+            ? { glyph: "\u2717", color: ATTENTION_COLORS.denied, label: "Question dismissed" }
+            : { glyph: "\u2713", color: ATTENTION_COLORS.approved, label: "Question answered" };
     }
 
     return null;
@@ -456,7 +468,7 @@ function LaneTrack({
                 }
 
                 const left = compression.position(ms);
-                const mark = permissionMark(event);
+                const mark = attentionMark(event);
 
                 return (
                     <Fragment key={`${lane.key}-event-${event.id ?? index}`}>

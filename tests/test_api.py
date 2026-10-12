@@ -448,6 +448,50 @@ def test_presence_permission_waiting_returns_to_active(tmp_path: Path) -> None:
         assert datetime.fromisoformat(waiting["end"]) == t0 + timedelta(minutes=12)
 
 
+def test_presence_question_waiting_returns_to_active(tmp_path: Path) -> None:
+    with make_client(tmp_path, PUSH_SOURCE) as client:
+        db_path = tmp_path / "activity.db"
+        t0 = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
+        fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
+
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "insert into program (program_id, source, host, actor, started_at, last_seen_at, ended_at)"
+            " values (?, ?, ?, ?, ?, ?, ?)",
+            ("p1", "opencode", "h1", "opencode", fmt(t0), fmt(t0 + timedelta(hours=1)), fmt(t0 + timedelta(hours=1))),
+        )
+        conn.commit()
+        conn.close()
+
+        def event(pid: str, kind: str, minutes: int, data: dict | None = None) -> None:
+            client.post(
+                "/api/ingest/opencode",
+                json={
+                    "id": pid,
+                    "kind": kind,
+                    "actor": "user",
+                    "timestamp": fmt(t0 + timedelta(minutes=minutes)),
+                    "data": data or {"sessionID": "sess-1"},
+                    "program": {"id": "p1", "source": "opencode", "host": "h1"},
+                },
+            )
+
+        event("a", "prompt.begin", 5)
+        event("b", "question.asked", 9, {"sessionID": "sess-1", "requestID": "frm-1", "header": "Pick"})
+        event("c", "question.replied", 14, {"sessionID": "sess-1", "requestID": "frm-1", "status": "answered"})
+        event("d", "prompt.end", 20)
+
+        lane = client.get(
+            "/api/timelines/presence", params={"start": fmt(t0), "end": fmt(t0 + timedelta(hours=1))}
+        ).json()["lanes"][0]
+
+        assert [seg["state"] for seg in lane["segments"]] == ["idle", "active", "waiting", "active", "idle"]
+
+        waiting = lane["segments"][2]
+        assert datetime.fromisoformat(waiting["start"]) == t0 + timedelta(minutes=9)
+        assert datetime.fromisoformat(waiting["end"]) == t0 + timedelta(minutes=14)
+
+
 def test_presence_timeline_with_aware_utc_query(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE) as client:
         client.post("/api/programs/start", json={"program_id": "p1", "source": "opencode", "host": "h1"})

@@ -93,10 +93,14 @@ React/TS/Vite frontend, single server serving the built frontend.
   the lowest lane and merge into one line. Each lane renders `active`/`idle`/`closed`/`waiting`
   segments (`_active_ranges` + `_compose_segments`). States are driven by
   event kinds, not matched pairs: `prompt.begin` → `active`, `permission.asked` → `waiting`,
-  `permission.replied` → `active`, `prompt.end` → `idle` (`_EVENT_STATE`); a run is `idle` by
+  `permission.replied` → `active`, `question.asked` → `waiting`, `question.replied` → `active`,
+  `prompt.end` → `idle` (`_EVENT_STATE`); a run is `idle` by
   default and ends `closed`. Events attach to a lane via `data.raw.program.id` (`_lane_events`).
   The opencode plugins emit `permission.asked`/`permission.replied` only when the user is actually
   prompted (auto-allowed calls are skipped) so the timeline can show where attention was needed.
+  The V2 plugin emits `question.asked`/`question.replied` from the `form.created`/`form.replied`/
+  `form.cancelled` events of the built-in `question` tool (`metadata.kind === "question"`); V1 has
+  no question tool.
 - **User timeline**: `GET /api/timelines/user` reconstructs desktop activity from the `windows`
   source. `_focus_spans` turns `focus` events into spans (a close carries `duration_ms` and ends at
   `timestamp`; a trailing open runs to the query end), grouping them into one lane per process
@@ -120,9 +124,10 @@ React/TS/Vite frontend, single server serving the built frontend.
   `program@host` (with a `#N` suffix when several lanes share the same program+host), and a passive
   `Code` row (git `commit`/`push` dots on a line that is always closed) below them. All rows share one theme — active = filled bar (user: `focus` spans; agent: `active`
   segments), idle = outlined bar (user: `idle` input intervals; agent: `idle` segments), waiting =
-  hatched bar (agent: `waiting` segments, i.e. a permission prompt), closed = plain line (user:
+  hatched bar (agent: `waiting` segments, i.e. a permission or question prompt), closed = plain line (user:
   `lock` intervals; agent: `closed` segments) — with event dots overlaid on agent lanes. Permission
-  events render as `?` (asked) / `✓` (approved) / `✗` (denied) badges instead of dots. The timeline
+  events render as `?` (asked) / `✓` (approved) / `✗` (denied) badges instead of dots, and question
+  events as `?` (asked) / `✓` (answered) / `✗` (dismissed) badges. The timeline
   is cropped to the first/last activity
   (leading/trailing dead time is dropped). Interior dead spans (> 1 h) are compressed to an
   axis-break mark (15 min of context kept on each side); dots falling inside a compressed span are

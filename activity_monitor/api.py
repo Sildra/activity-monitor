@@ -204,6 +204,8 @@ _EVENT_STATE: dict[str, str] = {
     "prompt.end": "idle",
     "permission.asked": "waiting",
     "permission.replied": "active",
+    "question.asked": "waiting",
+    "question.replied": "active",
 }
 
 

@@ -27,6 +27,41 @@ type PermissionPending = {
     action: string;
 };
 
+type QuestionPending = {
+    sessionID: string;
+    start: number;
+    title: string;
+};
+
+type QuestionField = {
+    key?: string;
+    title?: string;
+    description?: string;
+    type?: string;
+    options?: Array<{ value?: string; label?: string; description?: string }>;
+};
+
+// The `question` tool renders each question as a form field (see opencode's
+// QuestionTool): the field `description` is the question, `title` is the short
+// header, and `options` are the choices. Forms created for other reasons (e.g.
+// integration auth) carry a different `metadata.kind`, so we can tell them apart.
+const questionFields = (form: { fields?: unknown }): QuestionField[] =>
+    Array.isArray(form.fields) ? (form.fields as QuestionField[]) : [];
+
+const formatAnswer = (answer: unknown): string | null => {
+    if (answer === undefined || answer === null) {
+        return null;
+    }
+
+    if (Array.isArray(answer)) {
+        return answer.length > 0 ? answer.map((part) => String(part)).join(", ") : null;
+    }
+
+    const text = String(answer);
+
+    return text.length > 0 ? text : null;
+};
+
 const envVar = (name: string): string | undefined => {
     const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
 
@@ -141,6 +176,7 @@ export default Plugin.define({
         const shadowSessions = new Set<string>();
         const shadowTurns = new Set<string>();
         const permissionPending = new Map<string, PermissionPending>();
+        const questionPending = new Map<string, QuestionPending>();
         const shadowAll = envShadow();
 
         let lastError = "";
@@ -283,6 +319,100 @@ export default Plugin.define({
                         continue;
                     }
 
+                    if (event.type === "form.created") {
+                        const form = event.data.form;
+                        const metadata = form.metadata as { kind?: string } | undefined;
+
+                        // Only the built-in `question` tool tags its form with kind "question";
+                        // unrelated forms (integration auth, etc.) are ignored.
+                        if (metadata?.kind !== "question") {
+                            continue;
+                        }
+
+                        const start = Date.now();
+                        const fields = questionFields(form);
+                        const first = fields[0];
+                        const header = first?.title ?? form.title;
+                        const question = first?.description ?? first?.title ?? form.title;
+                        const options = (first?.options ?? [])
+                            .map((option) => option.label ?? option.value)
+                            .filter((value): value is string => typeof value === "string");
+
+                        questionPending.set(form.id, { sessionID: form.sessionID, start, title: header });
+
+                        if (shadowTurns.has(form.sessionID)) {
+                            continue;
+                        }
+
+                        await ingest({
+                            id: stableId("question", "asked", form.id),
+                            kind: "question.asked",
+                            timestamp: new Date(start).toISOString(),
+                            actor: opts.actor,
+                            task: sessionTask(form.sessionID),
+                            title: `question: ${header}`,
+                            detail: question,
+                            tags: ["opencode", "question"],
+                            data: {
+                                sessionID: form.sessionID,
+                                requestID: form.id,
+                                header,
+                                question,
+                                options,
+                            },
+                            program: programEvents(),
+                        });
+
+                        continue;
+                    }
+
+                    if (event.type === "form.replied" || event.type === "form.cancelled") {
+                        const data = event.data;
+                        const record = questionPending.get(data.id);
+
+                        // A reply for a form we never saw (or that was not a question) is not ours.
+                        if (record === undefined) {
+                            continue;
+                        }
+
+                        questionPending.delete(data.id);
+
+                        if (shadowTurns.has(data.sessionID)) {
+                            continue;
+                        }
+
+                        const done = Date.now();
+                        const dismissed = event.type === "form.cancelled";
+                        const answers =
+                            event.type === "form.replied"
+                                ? Object.values(event.data.answer as Record<string, unknown>)
+                                      .map(formatAnswer)
+                                      .filter((value): value is string => value !== null)
+                                : [];
+                        const answer = answers.length > 0 ? answers.join(" \u00b7 ") : null;
+
+                        await ingest({
+                            id: stableId("question", "replied", data.id),
+                            kind: "question.replied",
+                            timestamp: new Date(done).toISOString(),
+                            actor: opts.actor,
+                            task: sessionTask(data.sessionID),
+                            title: `${dismissed ? "dismissed" : "answered"}: ${record.title}`,
+                            detail: answer,
+                            duration_ms: done - record.start,
+                            tags: ["opencode", "question"],
+                            data: {
+                                sessionID: data.sessionID,
+                                requestID: data.id,
+                                status: dismissed ? "dismissed" : "answered",
+                                answer,
+                            },
+                            program: programEvents(),
+                        });
+
+                        continue;
+                    }
+
                     if (event.type !== "session.idle") {
                         continue;
                     }
@@ -294,6 +424,12 @@ export default Plugin.define({
                     for (const [requestID, permission] of permissionPending) {
                         if (permission.sessionID === sessionID) {
                             permissionPending.delete(requestID);
+                        }
+                    }
+
+                    for (const [formID, question] of questionPending) {
+                        if (question.sessionID === sessionID) {
+                            questionPending.delete(formID);
                         }
                     }
 
