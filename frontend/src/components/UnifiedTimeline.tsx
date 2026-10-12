@@ -591,7 +591,7 @@ export default function UnifiedTimeline({
 
     for (const lane of displayLanes) {
         for (const segment of lane.segments) {
-            if (segment.state === "closed") {
+            if (segment.state !== "active") {
                 continue;
             }
 
