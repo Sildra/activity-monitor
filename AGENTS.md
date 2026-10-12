@@ -29,20 +29,23 @@ React/TS/Vite frontend, single server serving the built frontend.
   - `sources.py` — `SourceProvider` base, `BashHistory`/`GitHistory`/`Push` providers, `PROVIDERS`, `build_sources`
   - `api.py` — all endpoints (one router)
 - `frontend/` — Vite + React 19 + TS + MUI app
-- `plugins/opencode-activity.ts` — opencode plugin reporting program lifecycle + prompts: on load
-  it POSTs `/api/programs/start` with `program_id` = the OS PID (+ `host`), heartbeats
-  `/api/programs/beat` every ~60s, and `/api/programs/end` on exit (the `dispose` hook). Prompts are
-  posted as `prompt.begin`/`prompt.end` to `/api/ingest/opencode` with a top-level
-  `program: { id, source, host }` so the presence timeline can pin them to a lane (enabled via
-  `opencode.json`; deterministic SHA-1 ids so re-sends dedupe). The `/task <id>` command (declared
-  in `opencode.json`) is intercepted by the `command.execute.before` hook: it records a `task.set`
-  event, pins subsequent prompts of that session to the id (a `sessionTasks` map; `/task` alone
-  clears it), and throws to abort the command so no prompt reaches the model. Restart opencode
-  after editing it.
-- `plugins/post-commit` + `plugins/pre-push` — git hooks POSTing to `/api/ingest/git`; commit
+- `plugins/opencode-v2/` — opencode 2 plugin (entry `index.ts`, `@opencode/plugin`) reporting program
+  lifecycle + prompts: on load it POSTs `/api/programs/start` with `program_id` = the OS PID
+  (+ `host`), heartbeats `/api/programs/beat` every ~60s, and `/api/programs/end` on unload (the
+  `setup` cleanup function). Prompts are posted as `prompt.begin`/`prompt.end` to
+  `/api/ingest/opencode` with a top-level `program: { id, source, host }` so the presence timeline
+  can pin them to a lane (enabled via `opencode.json`; deterministic SHA-1 ids so re-sends dedupe).
+  `prompt.begin` is recorded in the `ctx.session.hook("prompt", ...)` hook; `prompt.end` comes from
+  the `session.idle` event on `ctx.event.subscribe(...)` (V2 has no `session.error` event). The
+  `/task <id>` command is registered by the plugin via `ctx.command.transform` — its executor never
+  submits a prompt, so no model turn happens; it records a `task.set` event and pins subsequent
+  prompts of that session to the id (a `sessionTasks` map; `/task` alone clears it). `opencode-v1/`
+  holds the legacy V1 implementation (`@opencode-ai/plugin`, `command.execute.before` + throw to
+  abort) for OpenCode 1 — V1 plugins do not run on V2. Restart opencode after editing the plugin.
+- `plugins/git/` — `post-commit` + `pre-push` git hooks POSTing to `/api/ingest/git`; commit
   registers branch + commit id (+ repo/author/subject), push registers remote + branch + commit +
   prior sha as a distinct `push` event (`GitHistorySource.parse` branches on `kind`). Install with
-  `git config core.hooksPath <repo>/plugins`; `plugins/README.md` documents client setup. Every
+  `git config core.hooksPath <repo>/plugins/git`; `plugins/README.md` documents client setup. Every
   client (plugin, standalone watcher, hooks) reads `ACTIVITY_MONITOR_PORT` (default 8001); the
   backend also uses it as the port default when `--port` is not passed.
 - `pyproject.toml` — metadata, deps, ruff config, hatchling build, scripts `activity-monitor` +

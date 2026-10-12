@@ -1,0 +1,16 @@
+{
+  "name": "activity-monitor-opencode-v2",
+  "private": true,
+  "type": "module",
+  "description": "OpenCode 2 plugin reporting program lifecycle + prompts to the Activity Monitor",
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.0.26"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}
