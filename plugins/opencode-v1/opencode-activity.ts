@@ -21,6 +21,12 @@ type Pending = {
     start: number;
 };
 
+type PermissionPending = {
+    sessionID: string;
+    start: number;
+    action: string;
+};
+
 const envVar = (name: string): string | undefined => {
     const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
 
@@ -130,6 +136,8 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     const pending = new Map<string, Pending>();
     const sessionTasks = new Map<string, string>();
     const shadowSessions = new Set<string>();
+    const shadowTurns = new Set<string>();
+    const permissionPending = new Map<string, PermissionPending>();
     const shadowAll = envShadow();
 
     let lastError = "";
@@ -271,9 +279,13 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
                 return;
             }
 
-            const turnShadowed = shadowSessions.delete(input.sessionID);
+            const turnShadowed = shadowSessions.delete(input.sessionID) || prefixPart !== undefined;
 
-            if (shadowAll || prefixPart !== undefined || turnShadowed) {
+            if (turnShadowed) {
+                shadowTurns.add(input.sessionID);
+            }
+
+            if (shadowAll || turnShadowed) {
                 return;
             }
 
@@ -307,11 +319,98 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
             });
         },
         event: async ({ event }) => {
+            if (event.type === "permission.updated") {
+                const permission = event.properties;
+                const start = Date.now();
+                const resources = Array.isArray(permission.pattern)
+                    ? permission.pattern
+                    : permission.pattern !== undefined
+                      ? [permission.pattern]
+                      : [];
+
+                permissionPending.set(permission.id, {
+                    sessionID: permission.sessionID,
+                    start,
+                    action: permission.type,
+                });
+
+                if (shadowTurns.has(permission.sessionID)) {
+                    return;
+                }
+
+                await ingest({
+                    id: stableId("permission", "asked", permission.id),
+                    kind: "permission.asked",
+                    timestamp: new Date(start).toISOString(),
+                    actor: opts.actor,
+                    task: sessionTask(permission.sessionID),
+                    title: permission.title || `permission: ${permission.type}`,
+                    detail: resources.join(", "),
+                    tags: ["opencode", "permission"],
+                    data: {
+                        sessionID: permission.sessionID,
+                        requestID: permission.id,
+                        action: permission.type,
+                        resources,
+                        messageID: permission.messageID,
+                    },
+                    program: programEvents(),
+                });
+
+                return;
+            }
+
+            if (event.type === "permission.replied") {
+                const { sessionID, permissionID, response } = event.properties;
+                const record = permissionPending.get(permissionID);
+                const denied = response === "reject" || response === "deny" || response === "denied";
+
+                permissionPending.delete(permissionID);
+
+                if (shadowTurns.has(sessionID)) {
+                    return;
+                }
+
+                const done = Date.now();
+
+                await ingest({
+                    id: stableId("permission", "replied", permissionID),
+                    kind: "permission.replied",
+                    timestamp: new Date(done).toISOString(),
+                    actor: opts.actor,
+                    task: sessionTask(sessionID),
+                    title: `${denied ? "denied" : "approved"}: ${record?.action ?? "permission"}`,
+                    duration_ms: record !== undefined ? done - record.start : null,
+                    tags: ["opencode", "permission"],
+                    data: {
+                        sessionID,
+                        requestID: permissionID,
+                        reply: response,
+                        status: denied ? "denied" : "approved",
+                        action: record?.action ?? null,
+                    },
+                    program: programEvents(),
+                });
+
+                return;
+            }
+
             if (event.type !== "session.idle" && event.type !== "session.error") {
                 return;
             }
 
             const sessionID = event.properties.sessionID;
+
+            if (sessionID !== undefined) {
+                shadowTurns.delete(sessionID as string);
+
+                for (const [permissionID, permission] of permissionPending) {
+                    if (permission.sessionID === sessionID) {
+                        permissionPending.delete(permissionID);
+                    }
+                }
+            }
+
             const record = sessionID !== undefined ? pending.get(sessionID) : undefined;
 
             if (record === undefined) {

@@ -199,7 +199,12 @@ def _active_ranges(programs: list[Program], query_end: datetime, now: datetime) 
     return merged
 
 
-_EVENT_STATE: dict[str, str] = {"prompt.begin": "active", "prompt.end": "idle"}
+_EVENT_STATE: dict[str, str] = {
+    "prompt.begin": "active",
+    "prompt.end": "idle",
+    "permission.asked": "waiting",
+    "permission.replied": "active",
+}
 
 
 def _compose_segments(

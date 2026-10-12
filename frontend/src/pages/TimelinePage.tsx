@@ -115,6 +115,7 @@ export default function TimelinePage() {
                 task: event.task,
                 title: event.title,
                 duration_ms: event.duration_ms,
+                data: event.data,
             })),
         };
     });

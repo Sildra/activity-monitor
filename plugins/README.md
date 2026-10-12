@@ -106,6 +106,15 @@ Activity Monitor (no program lifecycle, no prompts). The option is read when
 opencode starts, so restart opencode after changing it. This is a process-wide
 kill switch; `/shadow` only affects the single prompt it precedes.
 
+While a prompt is blocked on a tool approval, the plugin reports the wait:
+`permission.asked` when the approval prompt appears and `permission.replied`
+when you answer (`data.status` is `approved` or `denied`, with the wait in
+`duration_ms`). The presence timeline renders the wait as a hatched `waiting`
+block, and the lane shows the events as `?` / `✓` / `✗`. Auto-approved calls
+(saved "always" rules or config `allow`) are **not** reported — only prompts that
+actually need your attention. Both `/shadow` and `ACTIVITY_MONITOR_SHADOW`
+suppress permission events too.
+
 V2 implementation notes:
 
 - `prompt.begin` is recorded in the `ctx.session.hook("prompt", ...)` hook (it
@@ -113,6 +122,9 @@ V2 implementation notes:
 - `prompt.end` is recorded from the `session.idle` event on
   `ctx.event.subscribe(...)`. V2 has no `session.error` event, so a finished
   prompt always reports status `completed`.
+- `permission.asked` / `permission.replied` come from the same
+  `ctx.event.subscribe(...)` stream; the ask is paired to its reply by request id
+  to compute the wait duration.
 - V2 has no server-side toast API, so plugin errors only reach opencode's logs.
 - The plugin folder pins `@opencode/plugin` in `package.json` so editors can
   type-check it (`npm install` in the folder); the runtime resolves the package

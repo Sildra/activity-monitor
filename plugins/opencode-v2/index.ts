@@ -21,6 +21,12 @@ type Pending = {
     start: number;
 };
 
+type PermissionPending = {
+    sessionID: string;
+    start: number;
+    action: string;
+};
+
 const envVar = (name: string): string | undefined => {
     const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
 
@@ -133,6 +139,8 @@ export default Plugin.define({
         const pending = new Map<string, Pending>();
         const sessionTasks = new Map<string, string>();
         const shadowSessions = new Set<string>();
+        const shadowTurns = new Set<string>();
+        const permissionPending = new Map<string, PermissionPending>();
         const shadowAll = envShadow();
 
         let lastError = "";
@@ -204,11 +212,91 @@ export default Plugin.define({
         void (async () => {
             try {
                 for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+                    if (event.type === "permission.asked") {
+                        const data = event.data;
+                        const start = Date.now();
+
+                        permissionPending.set(data.id, {
+                            sessionID: data.sessionID,
+                            start,
+                            action: data.action,
+                        });
+
+                        if (shadowTurns.has(data.sessionID)) {
+                            continue;
+                        }
+
+                        await ingest({
+                            id: stableId("permission", "asked", data.id),
+                            kind: "permission.asked",
+                            timestamp: new Date(start).toISOString(),
+                            actor: opts.actor,
+                            task: sessionTask(data.sessionID),
+                            title: `permission: ${data.action}`,
+                            detail: data.resources.join(", "),
+                            tags: ["opencode", "permission"],
+                            data: {
+                                sessionID: data.sessionID,
+                                requestID: data.id,
+                                action: data.action,
+                                resources: data.resources,
+                                source: data.source,
+                            },
+                            program: programEvents(),
+                        });
+
+                        continue;
+                    }
+
+                    if (event.type === "permission.replied") {
+                        const data = event.data;
+                        const record = permissionPending.get(data.requestID);
+                        const denied = data.reply === "reject";
+
+                        permissionPending.delete(data.requestID);
+
+                        if (shadowTurns.has(data.sessionID)) {
+                            continue;
+                        }
+
+                        const done = Date.now();
+
+                        await ingest({
+                            id: stableId("permission", "replied", data.requestID),
+                            kind: "permission.replied",
+                            timestamp: new Date(done).toISOString(),
+                            actor: opts.actor,
+                            task: sessionTask(data.sessionID),
+                            title: `${denied ? "denied" : "approved"}: ${record?.action ?? "permission"}`,
+                            duration_ms: record !== undefined ? done - record.start : null,
+                            tags: ["opencode", "permission"],
+                            data: {
+                                sessionID: data.sessionID,
+                                requestID: data.requestID,
+                                reply: data.reply,
+                                status: denied ? "denied" : "approved",
+                                action: record?.action ?? null,
+                            },
+                            program: programEvents(),
+                        });
+
+                        continue;
+                    }
+
                     if (event.type !== "session.idle") {
                         continue;
                     }
 
                     const sessionID = event.data.sessionID;
+
+                    shadowTurns.delete(sessionID);
+
+                    for (const [requestID, permission] of permissionPending) {
+                        if (permission.sessionID === sessionID) {
+                            permissionPending.delete(requestID);
+                        }
+                    }
+
                     const record = pending.get(sessionID);
 
                     if (record === undefined) {
@@ -248,9 +336,13 @@ export default Plugin.define({
             }
 
             const text = event.prompt.text.trim();
-            const turnShadowed = shadowSessions.delete(event.sessionID);
+            const turnShadowed = shadowSessions.delete(event.sessionID) || prefix !== null;
 
-            if (!text || shadowAll || prefix !== null || turnShadowed) {
+            if (turnShadowed) {
+                shadowTurns.add(event.sessionID);
+            }
+
+            if (!text || shadowAll || turnShadowed) {
                 return;
             }
 

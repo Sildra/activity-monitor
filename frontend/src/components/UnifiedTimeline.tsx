@@ -3,7 +3,7 @@ import { Box, Tooltip, Typography } from "@mui/material";
 import { colorForKind } from "../lib/timeline";
 import { formatDuration, formatTime, parseDate } from "../lib/format";
 
-export type UnifiedState = "closed" | "idle" | "active";
+export type UnifiedState = "closed" | "idle" | "active" | "waiting";
 
 export interface UnifiedSegment {
     start: string;
@@ -19,6 +19,7 @@ export interface UnifiedTimelineEvent {
     task?: string | null;
     title?: string | null;
     duration_ms?: number | null;
+    data?: Record<string, unknown> | null;
 }
 
 export interface UnifiedLane {
@@ -358,6 +359,24 @@ function RowLabel({ label, detail }: { label: string; detail: string }) {
     );
 }
 
+const PERMISSION_COLORS = { asked: "#f59e0b", approved: "#22c55e", denied: "#ef4444" };
+
+function permissionMark(event: UnifiedTimelineEvent): { glyph: string; color: string; label: string } | null {
+    if (event.kind === "permission.asked") {
+        return { glyph: "?", color: PERMISSION_COLORS.asked, label: "Permission requested" };
+    }
+
+    if (event.kind === "permission.replied") {
+        const denied = event.data?.status === "denied" || event.data?.reply === "reject";
+
+        return denied
+            ? { glyph: "\u2717", color: PERMISSION_COLORS.denied, label: "Permission denied" }
+            : { glyph: "\u2713", color: PERMISSION_COLORS.approved, label: "Permission approved" };
+    }
+
+    return null;
+}
+
 function LaneTrack({
     lane,
     compression,
@@ -417,6 +436,10 @@ function LaneTrack({
                                 height: BAR_HEIGHT,
                                 transform: "translateY(-50%)",
                                 bgcolor: segment.state === "active" ? lane.color : "transparent",
+                                backgroundImage:
+                                    segment.state === "waiting"
+                                        ? `repeating-linear-gradient(45deg, ${lane.color} 0, ${lane.color} 2px, transparent 2px, transparent 6px)`
+                                        : undefined,
                                 border: segment.state === "active" ? 0 : 1,
                                 borderColor: lane.color,
                             }}
@@ -433,6 +456,7 @@ function LaneTrack({
                 }
 
                 const left = compression.position(ms);
+                const mark = permissionMark(event);
 
                 return (
                     <Fragment key={`${lane.key}-event-${event.id ?? index}`}>
@@ -441,7 +465,7 @@ function LaneTrack({
                             title={
                                 <Box>
                                     <Typography variant="caption" sx={{ display: "block" }}>
-                                        {event.actor} · {event.kind}
+                                        {mark ? `${mark.label} · ${event.kind}` : `${event.actor} · ${event.kind}`}
                                     </Typography>
                                     {event.title && (
                                         <Typography variant="caption" sx={{ display: "block" }}>
@@ -457,25 +481,56 @@ function LaneTrack({
                                 </Box>
                             }
                         >
-                            <Box
-                                onClick={() => onSelect?.(event)}
-                                sx={{
-                                    position: "absolute",
-                                    top: "50%",
-                                    left: `${left}%`,
-                                    transform: "translate(-50%, -50%)",
-                                    width: 10,
-                                    height: 10,
-                                    borderRadius: "50%",
-                                    bgcolor: colorForKind(event.kind),
-                                    border: "2px solid",
-                                    borderColor: "background.paper",
-                                    cursor: onSelect ? "pointer" : "default",
-                                    zIndex: 2,
-                                    transition: "transform 120ms",
-                                    "&:hover": { transform: "translate(-50%, -50%) scale(1.5)" },
-                                }}
-                            />
+                            {mark ? (
+                                <Box
+                                    onClick={() => onSelect?.(event)}
+                                    sx={{
+                                        position: "absolute",
+                                        top: "50%",
+                                        left: `${left}%`,
+                                        transform: "translate(-50%, -50%)",
+                                        width: 14,
+                                        height: 14,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        borderRadius: "3px",
+                                        bgcolor: mark.color,
+                                        color: "#fff",
+                                        fontSize: 11,
+                                        fontWeight: 700,
+                                        lineHeight: 1,
+                                        border: "1px solid",
+                                        borderColor: "background.paper",
+                                        cursor: onSelect ? "pointer" : "default",
+                                        zIndex: 3,
+                                        transition: "transform 120ms",
+                                        "&:hover": { transform: "translate(-50%, -50%) scale(1.35)" },
+                                    }}
+                                >
+                                    {mark.glyph}
+                                </Box>
+                            ) : (
+                                <Box
+                                    onClick={() => onSelect?.(event)}
+                                    sx={{
+                                        position: "absolute",
+                                        top: "50%",
+                                        left: `${left}%`,
+                                        transform: "translate(-50%, -50%)",
+                                        width: 10,
+                                        height: 10,
+                                        borderRadius: "50%",
+                                        bgcolor: colorForKind(event.kind),
+                                        border: "2px solid",
+                                        borderColor: "background.paper",
+                                        cursor: onSelect ? "pointer" : "default",
+                                        zIndex: 2,
+                                        transition: "transform 120ms",
+                                        "&:hover": { transform: "translate(-50%, -50%) scale(1.5)" },
+                                    }}
+                                />
+                            )}
                         </Tooltip>
                     </Fragment>
                 );
@@ -488,16 +543,22 @@ function LaneTrack({
     );
 }
 
-function LegendSwatch({ outlined, label }: { outlined?: boolean; label: string }) {
+function LegendSwatch({ outlined, hatched, label }: { outlined?: boolean; hatched?: boolean; label: string }) {
+    const empty = outlined || hatched;
+
     return (
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <Box
                 sx={{
                     width: 24,
                     height: 10,
-                    bgcolor: outlined ? "transparent" : "text.primary",
-                    border: outlined ? 1 : 0,
+                    bgcolor: empty ? "transparent" : "text.primary",
+                    backgroundImage: hatched
+                        ? "repeating-linear-gradient(45deg, currentColor 0, currentColor 1px, transparent 1px, transparent 4px)"
+                        : undefined,
+                    border: empty ? 1 : 0,
                     borderColor: "text.primary",
+                    color: "text.primary",
                 }}
             />
             <Typography variant="caption" color="text.secondary">
@@ -652,6 +713,7 @@ export default function UnifiedTimeline({
             <Box sx={{ display: "flex", gap: 3, justifyContent: "flex-end", flexWrap: "wrap", mt: 1 }}>
                 <LegendSwatch label="Active" />
                 <LegendSwatch outlined label="Idle" />
+                <LegendSwatch hatched label="Waiting" />
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                     <Box sx={{ width: 24, height: 0, borderTop: 1, borderColor: "text.primary" }} />
                     <Typography variant="caption" color="text.secondary">
