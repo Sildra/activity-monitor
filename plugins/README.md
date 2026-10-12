@@ -149,6 +149,14 @@ time and lock state, and pushes `focus` / `idle.start` / `idle.end` / `lock` /
 `unlock` events to the `windows` Push source. It is `ctypes`-only (no extra
 dependencies) and windows-only.
 
+Each tick also compares the wall clock against the unbiased interrupt-time count
+(`QueryUnbiasedInterruptTime`), which stops while the machine is asleep. When
+they diverge by more than `--skew-seconds` (default 30) the watcher enters the
+locked state at the last pre-sleep tick; the normal lock handling closes it (at
+wake if the session woke unlocked, or at the real unlock if the machine locked
+itself to sleep), so a sleeping machine's time is not mistaken for attention and
+a lock that preceded the sleep is not reported twice.
+
 Set `ACTIVITY_MONITOR_URL` (or legacy vars) and run it from the repo root:
 
 ```bash
@@ -160,7 +168,7 @@ It defaults to `http://127.0.0.1:8001` if no URL is set. Override per run if
 needed:
 
 ```bash
-python -m activity_monitor.windows_watcher --base-url https://localhost:8001 --poll 1.0 --idle-minutes 2.0 --verbose
+python -m activity_monitor.windows_watcher --base-url https://localhost:8001 --poll 1.0 --idle-minutes 2.0 --skew-seconds 30.0 --verbose
 ```
 
 Alternatively, run it **inside** the backend (`python -m activity_monitor.main

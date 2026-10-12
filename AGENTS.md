@@ -55,9 +55,13 @@ React/TS/Vite frontend, single server serving the built frontend.
   window (`GetForegroundWindow`), input-idle time (`GetLastInputInfo`) and lock state
   (`OpenInputDesktop`), emitting `focus` / `idle.start` / `idle.end` / `lock` / `unlock` transitions
   (the `windows` Push source). Stdlib `ctypes` only; each event carries a unique `id` so re-sends
-  dedupe. Standalone (`python -m activity_monitor.windows_watcher`) it POSTs to
-  `/api/ingest/windows`; embedded (`--watch-windows` / `general.watch_windows`) the backend starts
-  it in-process and it writes straight to the DB via `store_events`. Restart it after editing.
+  dedupe. Each tick also compares the wall clock against the unbiased interrupt-time count
+  (`QueryUnbiasedInterruptTime`, which stops during sleep) and, on a divergence over `skew_seconds`
+  (default 30), enters the locked state at the last pre-sleep tick — closed by the normal lock
+  handling at wake (session woke unlocked) or at the real unlock (machine locked to sleep) — so
+  sleeping time is not counted as attention. Standalone (`python -m activity_monitor.windows_watcher`)
+  it POSTs to `/api/ingest/windows`; embedded (`--watch-windows` / `general.watch_windows`) the backend
+  starts it in-process and it writes straight to the DB via `store_events`. Restart it after editing.
 - `tests/` — pytest (`TestClient`, temp config/db)
 
 ## Backend (FastAPI, Python 3.12)

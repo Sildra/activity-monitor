@@ -12,8 +12,18 @@ Events reported (source must be configured as a Push source, e.g. name `windows`
 - `idle.start` - no keyboard/mouse input for `idle_minutes`; timestamp is the
                  actual moment input stopped.
 - `idle.end`   - input resumed; `duration_ms` is the idle span length.
-- `lock`       - workstation locked (input desktop left the interactive one).
+- `lock`       - workstation locked (input desktop left the interactive one),
+                 or the machine was found to have been suspended (see below).
 - `unlock`     - workstation unlocked; `duration_ms` is the lock span length.
+
+The machine may also be suspended (sleep/hibernate) while the watcher is not
+running, which leaves the wall clock ahead of the time the watcher actually
+experienced. Each tick compares the wall clock against the unbiased
+interrupt-time count (which stops during sleep); when they diverge by more than
+`skew_seconds` the watcher enters the locked state at the last pre-sleep tick and
+lets the normal lock handling close it: at wake if the session woke unlocked, or
+at the real unlock if the machine locked itself as it slept. Either way the
+suspended span is reported as a lock rather than as attention.
 
 Events are idempotent: each carries a unique `id` so re-sends (retries, watcher
 restarts) dedupe on the server.
@@ -78,10 +88,13 @@ kernel32.QueryFullProcessImageNameW.restype = wt.BOOL
 kernel32.QueryFullProcessImageNameW.argtypes = [wt.HANDLE, wt.DWORD, wt.LPWSTR, ctypes.POINTER(wt.DWORD)]
 kernel32.CloseHandle.restype = wt.BOOL
 kernel32.CloseHandle.argtypes = [wt.HANDLE]
+kernel32.QueryUnbiasedInterruptTime.restype = wt.BOOL
+kernel32.QueryUnbiasedInterruptTime.argtypes = [ctypes.POINTER(ctypes.c_ulonglong)]
 
 EventSink = Callable[[dict[str, Any]], bool]
 
 DEFAULT_PORT = "8001"
+DEFAULT_SKEW_SECONDS = 30.0
 
 
 def default_base_url() -> str:
@@ -121,6 +134,21 @@ def idle_millis() -> int:
         return 0
 
     return (kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF
+
+
+def unbiased_time() -> float | None:
+    """Working-state time in seconds since boot, excluding sleep/hibernation.
+
+    The wall clock keeps moving while the machine is suspended, but the unbiased
+    interrupt-time count does not, so the difference between the two exposes the
+    clock skew a sleeping machine introduces. Returns ``None`` if unavailable.
+    """
+    value = ctypes.c_ulonglong(0)
+
+    if not kernel32.QueryUnbiasedInterruptTime(ctypes.byref(value)):
+        return None
+
+    return value.value / 10_000_000.0
 
 
 def is_locked() -> bool:
@@ -235,6 +263,7 @@ class WindowsWatcher:
         actor: str = "user",
         poll: float = 1.0,
         idle_minutes: float = 2.0,
+        skew_seconds: float = DEFAULT_SKEW_SECONDS,
         verbose: bool = False,
     ) -> None:
         self._sink = sink
@@ -242,6 +271,7 @@ class WindowsWatcher:
         self.actor = actor
         self.poll = poll
         self.idle_threshold = timedelta(minutes=idle_minutes)
+        self.skew_threshold = skew_seconds
         self.verbose = verbose
 
         self._seq = 0
@@ -257,6 +287,9 @@ class WindowsWatcher:
 
         self._was_locked = False
         self._lock_start: datetime | None = None
+
+        self._last_wall: datetime | None = None
+        self._last_unbiased: float | None = None
 
     # -- event plumbing ------------------------------------------------------
 
@@ -296,6 +329,40 @@ class WindowsWatcher:
         self._pending = remaining
 
     # -- sampling ------------------------------------------------------------
+
+    def detect_sleep(self, now: datetime) -> None:
+        """Report a suspension gap as a lock when the wall clock outran working time.
+
+        The unbiased interrupt-time count freezes while the machine sleeps, so a
+        wall-clock delta that far exceeds it means the machine was suspended for
+        that span (no clock skew accrues from mere scheduling delays, since both
+        clocks keep running then).
+        """
+        unbiased = unbiased_time()
+        last_wall = self._last_wall
+        last_unbiased = self._last_unbiased
+
+        self._last_wall = now
+        self._last_unbiased = unbiased
+
+        if unbiased is None or last_unbiased is None or last_wall is None:
+            return
+
+        skew = (now - last_wall).total_seconds() - (unbiased - last_unbiased)
+
+        if skew < self.skew_threshold:
+            return
+
+        # Already inside a lock that started before the sleep: its unlock already
+        # spans the gap, so there is nothing to add.
+        if self._was_locked:
+            return
+
+        # Treat the suspended span as a lock that began at the last tick before
+        # sleep. The regular lock sampling closes it: on this same tick if the
+        # session woke unlocked, or whenever the user unlocks if the machine
+        # locked to sleep, so a lock that preceded the sleep is never doubled.
+        self.enter_lock(last_wall, detail=f"machine suspended ({skew:.0f}s clock skew)")
 
     def sample_focus(self, now: datetime) -> None:
         current = foreground_window()
@@ -352,34 +419,38 @@ class WindowsWatcher:
             self._idle_start = None
             self.event(kind="idle.end", timestamp=now, duration_ms=max(0.0, duration))
 
+    def enter_lock(self, now: datetime, detail: str | None = None) -> None:
+        """Enter the locked state, closing any open idle/focus span at `now`."""
+        self._was_locked = True
+        self._lock_start = now
+
+        if self._was_idle and self._idle_start is not None:
+            duration = (now - self._idle_start).total_seconds() * 1000.0
+            self._was_idle = False
+            self._idle_start = None
+            self.event(kind="idle.end", timestamp=now, duration_ms=max(0.0, duration))
+
+        if self._focus is not None and self._focus_start is not None:
+            duration = (now - self._focus_start).total_seconds() * 1000.0
+            self.event(
+                kind="focus",
+                timestamp=now,
+                title=self._focus["title"],
+                task=self._focus["process"],
+                detail=self._focus["image"] or f"pid {self._focus['pid']}",
+                duration_ms=max(0.0, duration),
+            )
+            self._hwnd = None
+            self._focus = None
+            self._focus_start = None
+
+        self.event(kind="lock", timestamp=now, **({"detail": detail} if detail else {}))
+
     def sample_lock(self, now: datetime) -> None:
         locked = is_locked()
 
         if locked and not self._was_locked:
-            self._was_locked = True
-            self._lock_start = now
-
-            if self._was_idle and self._idle_start is not None:
-                duration = (now - self._idle_start).total_seconds() * 1000.0
-                self._was_idle = False
-                self._idle_start = None
-                self.event(kind="idle.end", timestamp=now, duration_ms=max(0.0, duration))
-
-            if self._focus is not None and self._focus_start is not None:
-                duration = (now - self._focus_start).total_seconds() * 1000.0
-                self.event(
-                    kind="focus",
-                    timestamp=now,
-                    title=self._focus["title"],
-                    task=self._focus["process"],
-                    detail=self._focus["image"] or f"pid {self._focus['pid']}",
-                    duration_ms=max(0.0, duration),
-                )
-                self._hwnd = None
-                self._focus = None
-                self._focus_start = None
-
-            self.event(kind="lock", timestamp=now)
+            self.enter_lock(now)
 
         if not locked and self._was_locked:
             duration = (now - self._lock_start).total_seconds() * 1000.0 if self._lock_start else 0.0
@@ -396,6 +467,7 @@ class WindowsWatcher:
         if self.verbose:
             print(f"[watcher] tick {now.isoformat(timespec='seconds')}", flush=True)
 
+        self.detect_sleep(now)
         self.sample_lock(now)
         self.sample_focus(now)
         self.sample_idle(now)
@@ -431,6 +503,7 @@ def start_database_watcher(
     actor: str = "user",
     poll: float = 1.0,
     idle_minutes: float = 2.0,
+    skew_seconds: float = DEFAULT_SKEW_SECONDS,
     verbose: bool = False,
 ) -> tuple[threading.Event, threading.Thread]:
     """Start the watcher in-process, writing events straight to the database."""
@@ -441,6 +514,7 @@ def start_database_watcher(
         actor=actor,
         poll=poll,
         idle_minutes=idle_minutes,
+        skew_seconds=skew_seconds,
         verbose=verbose,
     )
     stop = threading.Event()
@@ -461,6 +535,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--actor", default="user")
     parser.add_argument("--poll", type=float, default=1.0, help="sample interval in seconds")
     parser.add_argument("--idle-minutes", type=float, default=2.0, help="idle threshold in minutes")
+    parser.add_argument(
+        "--skew-seconds",
+        type=float,
+        default=DEFAULT_SKEW_SECONDS,
+        help="wall-clock skew above this many seconds is reported as the machine sleeping",
+    )
     parser.add_argument("--run", type=float, default=None, help="exit after N seconds (testing)")
     parser.add_argument("--once", action="store_true", help="sample once and exit (testing)")
     parser.add_argument("--verbose", action="store_true")
@@ -476,6 +556,7 @@ def main(argv: list[str] | None = None) -> int:
         actor=args.actor,
         poll=args.poll,
         idle_minutes=args.idle_minutes,
+        skew_seconds=args.skew_seconds,
         verbose=args.verbose,
     )
     print(f"[watcher] pushing '{args.source}' events to {base_url.rstrip('/')}", flush=True)
