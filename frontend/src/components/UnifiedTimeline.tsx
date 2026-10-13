@@ -359,7 +359,7 @@ function RowLabel({ label, detail }: { label: string; detail: string }) {
     );
 }
 
-const ATTENTION_COLORS = { asked: "#f59e0b", approved: "#22c55e", denied: "#ef4444", question: "#8b5cf6" };
+const ATTENTION_COLORS = { asked: "#f59e0b", approved: "#22c55e", denied: "#ef4444", question: "#3b82f6" };
 
 /** The plugin's own payload, stored under `data.raw.data` by `PushSource.parse`. */
 function eventPayload(event: UnifiedTimelineEvent): Record<string, unknown> {
