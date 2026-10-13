@@ -13,9 +13,10 @@ const asStatus = (value: unknown): Status => {
 };
 
 /**
- * Renders the Activity Monitor connection state in the TUI footer: green when
- * the last request succeeded, red when it failed, gray while the plugin is
- * running in shadow mode (or has not reported yet).
+ * Renders the Activity Monitor connection state in the TUI sidebar (the right
+ * pane), directly below the built-in MCP and Context sections: green when the
+ * last request succeeded, red when it failed, gray while the plugin is running
+ * in shadow mode (or has not reported yet).
  *
  * The state lives in the server plugin, so it is read over the plugin RPC
  * contract in `rpc.ts` and kept in a hot-reload-safe in-memory store.
@@ -44,25 +45,49 @@ export default Plugin.define({
         void rpc.status(undefined).then(apply, () => undefined);
 
         const render = () => {
-            const text = context.theme.text;
+            const theme = context.theme;
             const color =
                 status.state === "ok"
-                    ? text.feedback.success.base
+                    ? theme.text.feedback.success.base
                     : status.state === "error"
-                      ? text.feedback.error.base
-                      : text.muted;
-            const label = status.state === "error" ? "activity-monitor: error" : "activity-monitor";
+                      ? theme.text.feedback.error.base
+                      : theme.text.muted;
+            const label =
+                status.state === "ok"
+                    ? "Connected"
+                    : status.state === "error"
+                      ? "Error"
+                      : status.state === "shadow"
+                        ? "Shadow"
+                        : "Connecting";
 
-            return <text fg={color}>{`\u25cf ${label}`}</text>;
+            return (
+                <box flexDirection="row" gap={1} minWidth={0}>
+                    <text flexShrink={0} fg={color}>
+                        {"\u2022"}
+                    </text>
+                    <text flexShrink={0} fg={theme.text.base}>
+                        <b>Activity Monitor</b>
+                    </text>
+                    <text
+                        wrapMode="none"
+                        truncate
+                        flexGrow={1}
+                        flexShrink={1}
+                        minWidth={0}
+                        fg={status.state === "error" ? theme.text.feedback.error.base : theme.text.muted}
+                    >
+                        {label}
+                    </text>
+                </box>
+            );
         };
 
-        const unregisterHome = context.ui.slot({ append: "home.footer.status", render });
-        const unregisterPrompt = context.ui.slot({ append: "prompt.footer.status", render });
+        const unregisterSidebar = context.ui.slot({ append: "sidebar.content", render });
 
         return () => {
             unsubscribe();
-            unregisterHome();
-            unregisterPrompt();
+            unregisterSidebar();
         };
     },
 });

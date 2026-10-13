@@ -193,9 +193,9 @@ V2 implementation notes:
 
 ### TUI status indicator (V2)
 
-The V2 plugin also shows its connection state in the OpenCode TUI footer as a
-coloured `● activity-monitor` indicator (`home.footer.status` and
-`prompt.footer.status`):
+The V2 plugin also shows its connection state in the OpenCode TUI sidebar (the
+right pane) as a single coloured `Activity Monitor` line, rendered just below
+the built-in MCP and Context sections (`sidebar.content`):
 
 - **green** — the last report to the Activity Monitor succeeded.
 - **red** — the last report failed (the failure message is in the plugin log).
@@ -206,10 +206,11 @@ The state lives in the server half of the plugin (`index.ts`), which updates it
 on every `POST` and publishes it over the plugin RPC contract in `rpc.ts` (a
 `status` method plus a `state` event). `tui.tsx` — the package's `./tui` entry,
 which the OpenCode CLI loads automatically because the plugin directory is in
-`opencode.json` — subscribes to that RPC and renders the indicator. This is an
-OpenCode-only affordance: nothing about it is sent to the Activity Monitor or
-shown in its web UI. OpenCode 1 has no RPC bridge between its plugin halves, so
-the V1 plugin does not expose this state.
+`opencode.json` — subscribes to that RPC and renders the indicator. The sidebar
+is only shown for a session and when the terminal is wide enough to fit it. This
+is an OpenCode-only affordance: nothing about it is sent to the Activity Monitor
+or shown in its web UI. OpenCode 1 has no RPC bridge between its plugin halves,
+so the V1 plugin does not expose this state.
 
 ## Standalone Windows monitor
 

@@ -44,10 +44,10 @@ React/TS/Vite frontend, single server serving the built frontend.
   abort) for OpenCode 1 — V1 plugins do not run on V2. `index.ts` also tracks the connection state
   (`pending`/`ok`/`error`, or `shadow` while silent) and publishes it over the plugin RPC contract
   in `rpc.ts`; `tui.tsx` (the package's `./tui` entry, loaded by the CLI automatically) subscribes to
-  it and renders a coloured `● activity-monitor` indicator in the TUI footer (`home.footer.status` +
-  `prompt.footer.status`) — green = last request succeeded, red = failed, gray = shadow/pending. This
-  is an OpenCode-only affordance, never sent to the Activity Monitor. Typecheck with
-  `npm run typecheck` in the plugin folder. Restart opencode after editing the plugin.
+  it and renders a single coloured `● Activity Monitor` row in the TUI sidebar (`sidebar.content`,
+  below the built-in MCP and Context sections) — green = last request succeeded, red = failed, gray =
+  shadow/pending. This is an OpenCode-only affordance, never sent to the Activity Monitor. Typecheck
+  with `npm run typecheck` in the plugin folder. Restart opencode after editing the plugin.
 - `plugins/git/` — `post-commit` + `pre-push` git hooks POSTing to `/api/ingest/git`; commit
   registers branch + commit id (+ repo/author/subject), push registers remote + branch + commit +
   prior sha as a distinct `push` event (`GitHistorySource.parse` branches on `kind`). Install with
