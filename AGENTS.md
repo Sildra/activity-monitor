@@ -170,8 +170,9 @@ React/TS/Vite frontend, single server serving the built frontend.
   segments), idle = outlined bar (user: `idle` input intervals; agent: `idle` segments), waiting =
   hatched bar (agent: `waiting` segments, i.e. a permission or question prompt), closed = plain line (user:
   `lock` intervals; agent: `closed` segments) — with event dots overlaid on agent lanes. Permission
-  events render as `?` (asked) / `✓` (approved) / `✗` (denied) badges instead of dots, and question
-  events as `?` (asked) / `✓` (answered) / `✗` (dismissed) badges. The timeline
+  events render as `?` (asked) / `✓` (approved) / `✗` (denied) characters instead of dots, and question
+  events as `?` (asked) / `✓` (answered) / `✗` (dismissed) characters, each coloured by state with a
+  paper-coloured halo. The timeline
   is cropped to the first/last activity
   (leading/trailing dead time is dropped). Interior dead spans (> 1 h) are compressed to an
   axis-break mark (15 min of context kept on each side); dots falling inside a compressed span are
