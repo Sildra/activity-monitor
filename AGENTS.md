@@ -130,8 +130,9 @@ React/TS/Vite frontend, single server serving the built frontend.
   program's untagged events (`data.raw.program.id`/`host` match) with the new task, walking back to
   the previous `task.set` (`_backfill_task`) — the `/task` command only pins later events, so this
   retroactively attributes work done before the id was set while leaving earlier task ranges alone.
-- **Programs / presence**: `POST /api/programs/start|beat|end` manage live programs. Stale programs
-  (silent for `stale_after_seconds`) are closed via `_expire_stale`, which persists `ended_at`.
+- **Programs / presence**: `POST /api/programs/start|beat|end` manage live programs. `beat` bumps
+  `last_seen_at`; `end` and `_expire_stale` (stale after `stale_after_seconds`) close the program at
+  `last_seen_at` — its last activity — so a late exit request does not add a silent tail.
   `GET /api/timelines/presence` groups programs by `(source, host)` and assigns lane numbers at
   query time with `_assign_lanes` — a greedy non-overlap schedule, so restarted instances reuse
   the lowest lane and merge into one line. Each lane renders `active`/`idle`/`closed`/`waiting`

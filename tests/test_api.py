@@ -343,6 +343,32 @@ def test_program_end_and_beat_timestamps_are_aware_utc(tmp_path: Path) -> None:
             assert before <= stored_dt <= after
 
 
+def test_program_end_closes_at_last_activity(tmp_path: Path) -> None:
+    with make_client(tmp_path, PUSH_SOURCE) as client:
+        client.post("/api/programs/start", json={"program_id": "p1", "source": "opencode", "host": "h1"})
+
+        # The process was last seen two hours ago (e.g. it slept, then exited late).
+        last_seen = datetime.now(UTC) - timedelta(hours=2)
+        fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
+
+        conn = sqlite3.connect(tmp_path / "activity.db")
+        conn.execute("update program set last_seen_at = ? where program_id = 'p1'", (fmt(last_seen),))
+        conn.commit()
+        conn.close()
+
+        assert client.post("/api/programs/end", json={"program_id": "p1"}).status_code == 200
+
+        conn = sqlite3.connect(tmp_path / "activity.db")
+        stored_seen, ended = conn.execute(
+            "select last_seen_at, ended_at from program where program_id = 'p1'"
+        ).fetchone()
+        conn.close()
+
+        assert ended is not None
+        assert as_utc(datetime.fromisoformat(ended)) == as_utc(last_seen)
+        assert as_utc(datetime.fromisoformat(ended)) == as_utc(datetime.fromisoformat(stored_seen))
+
+
 def test_stale_program_detected_and_restart_merges_same_lane(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE, stale=1) as client:
         client.post("/api/programs/start", json={"program_id": "p1", "source": "opencode", "host": "h1"})

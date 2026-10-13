@@ -260,8 +260,9 @@ async def program_end(payload: ProgramRef, session: SessionDep) -> ProgramOut:
     if program is None:
         raise HTTPException(404, f"No active program '{payload.program_id}'")
 
-    program.ended_at = datetime.now(UTC)
-    program.last_seen_at = datetime.now(UTC)
+    # Close at the last activity rather than now: an exit request can arrive late
+    # (e.g. after the machine slept), and the silent tail is not attention.
+    program.ended_at = program.last_seen_at
     await session.commit()
 
     return ProgramOut(program_id=program.program_id, source=program.source, host=program.host)
