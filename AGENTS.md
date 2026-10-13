@@ -39,7 +39,10 @@ React/TS/Vite frontend, single server serving the built frontend.
   the `session.idle` event on `ctx.event.subscribe(...)` (V2 has no `session.error` event). The
   `/task <id>` command is registered by the plugin via `ctx.command.transform` — its executor never
   submits a prompt, so no model turn happens; it records a `task.set` event and pins subsequent
-  prompts of that session to the id (a `sessionTasks` map; `/task` alone clears it). `opencode-v1/`
+  prompts of that session to the id (a `sessionTasks` map; `/task` alone clears it). Before any
+  `/task` an event carries no task (the old project-name default was dropped so the backend can
+  backfill); on ingest the backend retags the program's earlier untagged events up to the previous
+  `task.set` (see Ingest). `opencode-v1/`
   holds the legacy V1 implementation (`@opencode-ai/plugin`, `command.execute.before` + throw to
   abort) for OpenCode 1 — V1 plugins do not run on V2. Its sidebar indicator is a separate,
   target-exclusive TUI module (`tui.tsx`, loaded from `tui.json`) that subscribes to a namespaced
@@ -123,7 +126,10 @@ React/TS/Vite frontend, single server serving the built frontend.
   Pull fetches run off the event loop (`asyncio.to_thread`) because `fetch()` is blocking.
 - **Ingest**: idempotent on `dedup_key` (external `id` or payload hash). New events are stored,
   duplicates ignored. `store_events` in `api.py` is the single write path. A top-level `host` in the
-  payload is stored on the event (and removed from `data.raw`).
+  payload is stored on the event (and removed from `data.raw`). A `task.set` event backs the
+  program's untagged events (`data.raw.program.id`/`host` match) with the new task, walking back to
+  the previous `task.set` (`_backfill_task`) — the `/task` command only pins later events, so this
+  retroactively attributes work done before the id was set while leaving earlier task ranges alone.
 - **Programs / presence**: `POST /api/programs/start|beat|end` manage live programs. Stale programs
   (silent for `stale_after_seconds`) are closed via `_expire_stale`, which persists `ended_at`.
   `GET /api/timelines/presence` groups programs by `(source, host)` and assigns lane numbers at

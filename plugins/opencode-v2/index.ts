@@ -18,7 +18,7 @@ type Options = {
 type Pending = {
     messageID: string;
     title: string;
-    task: string;
+    task: string | undefined;
     start: number;
 };
 
@@ -94,8 +94,6 @@ const firstTask = (text: string, max: number): string => {
 
     return line.length > max ? `${line.slice(0, max)}\u2026` : line;
 };
-
-const projectName = (directory: string): string => directory.split(/[\\/]/).filter(Boolean).pop() ?? "opencode";
 
 type TlsOptions = { ca?: Buffer; cert?: Buffer; key?: Buffer; rejectUnauthorized?: boolean };
 
@@ -260,8 +258,8 @@ export default Plugin.define({
 
         publishState();
 
-        const sessionTask = (sessionID: string | undefined): string =>
-            (sessionID !== undefined ? sessionTasks.get(sessionID) : undefined) ?? projectName(directory);
+        const sessionTask = (sessionID: string | undefined): string | undefined =>
+            sessionID !== undefined ? sessionTasks.get(sessionID) : undefined;
 
         const post = async (path: string, body: unknown, attempts = 1, backoffMs = 750): Promise<boolean> => {
             if (shadowAll) {

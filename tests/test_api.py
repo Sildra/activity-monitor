@@ -49,6 +49,64 @@ def test_ingest_dedup_and_stats(tmp_path: Path) -> None:
         assert stats == {"events": 1, "sources": 1, "actors": 1, "tasks": 1}
 
 
+def test_task_set_backfills_program_work_until_previous_task(tmp_path: Path) -> None:
+    with make_client(tmp_path, PUSH_SOURCE) as client:
+        t0 = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
+        fmt = lambda dt: dt.isoformat(" ", timespec="microseconds").replace("+00:00", "Z")
+
+        def ingest(
+            event_id: str,
+            kind: str,
+            seconds: int,
+            *,
+            title: str | None = None,
+            task: str | None = None,
+            program: str = "p1",
+        ) -> None:
+            body: dict[str, object] = {
+                "id": event_id,
+                "kind": kind,
+                "actor": "opencode",
+                "timestamp": fmt(t0 + timedelta(seconds=seconds)),
+                "program": {"id": program, "source": "opencode", "host": "h1"},
+            }
+
+            if title is not None:
+                body["title"] = title
+
+            if task is not None:
+                body["task"] = task
+
+            assert client.post("/api/ingest/opencode", json=body).json() == {"accepted": 1}
+
+        def task_of(title: str) -> str | None:
+            return next(event["task"] for event in client.get("/api/tasks").json() if event["title"] == title)
+
+        # Work done before the first /task is untagged and only pinned afterwards.
+        ingest("before", "prompt.begin", 10, title="before")
+        ingest("before-2", "prompt.begin", 20, title="before-2")
+        ingest("ts1", "task.set", 30, task="AAA")
+        ingest("under-a", "prompt.begin", 40, title="under-a", task="AAA")
+        ingest("ts2", "task.set", 50, task="BBB")
+        ingest("under-b", "prompt.begin", 60, title="under-b", task="BBB")
+
+        assert task_of("before") == "AAA"
+        assert task_of("before-2") == "AAA"
+        assert task_of("under-a") == "AAA"
+        assert task_of("under-b") == "BBB"
+
+        # A late, older untagged event arrives after the previous task.set, so the
+        # next one backfills only its own range and leaves this one alone.
+        ingest("late", "prompt.begin", 25, title="late")
+        ingest("fresh", "prompt.begin", 65, title="fresh")
+        ingest("other", "prompt.begin", 25, title="other", program="p2")
+        ingest("ts3", "task.set", 70, task="CCC")
+
+        assert task_of("late") is None
+        assert task_of("fresh") == "CCC"
+        assert task_of("other") is None
+
+
 def test_git_push_registers_branch_and_commit(tmp_path: Path) -> None:
     with make_client(tmp_path, GIT_SOURCE) as client:
         push = {

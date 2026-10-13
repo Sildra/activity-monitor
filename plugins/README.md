@@ -139,7 +139,10 @@ for HTTP Basic auth, set `ACTIVITY_MONITOR_USERNAME` / `ACTIVITY_MONITOR_PASSWOR
 
 Run `/task <id>` (e.g. `/task JIRA-123`) to pin the session to a task: the plugin
 records a `task.set` event and tags subsequent `prompt.begin`/`prompt.end` events
-with that id (`/task` by itself clears it). The V2 plugin registers `/task` as a
+with that id (`/task` by itself clears it). Work done before a `/task` carries no
+task; on ingest the backend backfills the program's earlier untagged events up to
+the previous `task.set`, so the id you set late still covers the work you already
+did — without touching an earlier task's range. The V2 plugin registers `/task` as a
 real command whose executor does not submit a prompt, so the model never runs
 (the V1 plugin achieved the same by intercepting and aborting the command).
 

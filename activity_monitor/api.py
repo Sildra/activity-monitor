@@ -7,7 +7,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from sqlalchemy import distinct, func, select
+from sqlalchemy import distinct, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from activity_monitor.db import get_session
@@ -79,8 +79,52 @@ def _provider(request: Request, name: str) -> SourceProvider:
     return provider
 
 
+_TASK_SET_KIND = "task.set"
+
+
+async def _backfill_task(session: AsyncSession, program_id: str, host: str, task: str, at: datetime) -> None:
+    """Retroactively tag a program's earlier untagged work after a ``task.set``.
+
+    A ``/task`` command only pins the events that follow it (the plugin tags them as
+    they happen), so work done before the task was set stays untagged. This walks the
+    same program's events back from ``at`` and stamps them with ``task``, stopping at
+    the previous ``task.set`` so an earlier task range is left intact.
+    """
+    program = func.json_extract(ActivityEvent.data, "$.raw.program.id")
+    program_host = func.json_extract(ActivityEvent.data, "$.raw.program.host")
+
+    previous = (
+        await session.execute(
+            select(func.max(ActivityEvent.timestamp)).where(
+                ActivityEvent.kind == _TASK_SET_KIND,
+                program == program_id,
+                program_host == host,
+                ActivityEvent.timestamp < at,
+            )
+        )
+    ).scalar_one_or_none()
+
+    stmt = (
+        update(ActivityEvent)
+        .where(
+            program == program_id,
+            program_host == host,
+            ActivityEvent.kind != _TASK_SET_KIND,
+            ActivityEvent.task.is_(None),
+            ActivityEvent.timestamp < at,
+        )
+        .values(task=task)
+    )
+
+    if previous is not None:
+        stmt = stmt.where(ActivityEvent.timestamp > as_utc(previous))
+
+    await session.execute(stmt)
+
+
 async def store_events(session: AsyncSession, provider: SourceProvider, raws: list[dict[str, Any]]) -> int:
     accepted = 0
+    task_sets: list[tuple[str, str, str, datetime]] = []
 
     for raw in raws:
         canonical = provider.parse(raw)
@@ -92,7 +136,26 @@ async def store_events(session: AsyncSession, provider: SourceProvider, raws: li
             session.add(ActivityEvent(source=provider.name, **canonical))
             accepted += 1
 
+            if canonical["kind"] == _TASK_SET_KIND and canonical.get("task"):
+                program = (canonical.get("data") or {}).get("raw", {}).get("program") or {}
+
+                if program.get("id"):
+                    task_sets.append(
+                        (
+                            str(program["id"]),
+                            str(program.get("host") or ""),
+                            str(canonical["task"]),
+                            canonical["timestamp"],
+                        )
+                    )
+
     await session.commit()
+
+    for program_id, host, task, at in task_sets:
+        await _backfill_task(session, program_id, host, task, at)
+
+    if task_sets:
+        await session.commit()
 
     return accepted
 
