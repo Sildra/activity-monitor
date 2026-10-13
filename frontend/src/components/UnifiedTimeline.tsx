@@ -504,29 +504,21 @@ function LaneTrack({
                             {mark ? (
                                 <Box
                                     onClick={() => onSelect?.(event)}
-                                    sx={{
+                                    sx={(theme) => ({
                                         position: "absolute",
                                         top: "50%",
                                         left: `${left}%`,
                                         transform: "translate(-50%, -50%)",
-                                        width: 14,
-                                        height: 14,
-                                        display: "flex",
-                                        alignItems: "center",
-                                        justifyContent: "center",
-                                        borderRadius: "3px",
-                                        bgcolor: mark.color,
-                                        color: "#fff",
-                                        fontSize: 11,
+                                        color: mark.color,
+                                        fontSize: 12,
                                         fontWeight: 700,
                                         lineHeight: 1,
-                                        border: "1px solid",
-                                        borderColor: "background.paper",
+                                        textShadow: `0 0 2px ${theme.palette.background.paper}, 0 0 2px ${theme.palette.background.paper}`,
                                         cursor: onSelect ? "pointer" : "default",
                                         zIndex: 3,
                                         transition: "transform 120ms",
                                         "&:hover": { transform: "translate(-50%, -50%) scale(1.35)" },
-                                    }}
+                                    })}
                                 >
                                     {mark.glyph}
                                 </Box>
