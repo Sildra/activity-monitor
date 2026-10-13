@@ -216,3 +216,41 @@ def test_focus_task_defaults_to_process(monkeypatch: pytest.MonkeyPatch) -> None
 
     focus = [event for event in events if event["kind"] == "focus"]
     assert [event["task"] for event in focus] == ["code.exe"]
+
+
+# -- event actor --------------------------------------------------------------
+
+
+def test_display_user_env_sets_actor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ACTIVITY_MONITOR_DISPLAY_USER", "sildr")
+    events: list[dict[str, Any]] = []
+    watcher = make_watcher(events)
+    FakeDesktop(monkeypatch, load_watcher_module())
+
+    watcher.tick(BASE)
+
+    assert {event["actor"] for event in events} == {"sildr"}
+
+
+def test_actor_defaults_to_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACTIVITY_MONITOR_DISPLAY_USER", raising=False)
+    events: list[dict[str, Any]] = []
+    watcher = make_watcher(events)
+    FakeDesktop(monkeypatch, load_watcher_module())
+
+    watcher.tick(BASE)
+
+    assert {event["actor"] for event in events} == {"user"}
+
+
+def test_explicit_actor_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ACTIVITY_MONITOR_DISPLAY_USER", "sildr")
+    windows_watcher = load_watcher_module()
+    events: list[dict[str, Any]] = []
+    sink: Callable[[dict[str, Any]], bool] = lambda payload: events.append(payload) or True
+    watcher = windows_watcher.WindowsWatcher(sink, actor="robot", skew_seconds=30.0)
+    FakeDesktop(monkeypatch, windows_watcher)
+
+    watcher.tick(BASE)
+
+    assert {event["actor"] for event in events} == {"robot"}

@@ -12,7 +12,8 @@ at your server.
 | `ACTIVITY_MONITOR_HOST` | `127.0.0.1` | legacy fallback |
 | `ACTIVITY_MONITOR_BASE_URL` | `http://localhost:$ACTIVITY_MONITOR_PORT` | legacy fallback for opencode plugins |
 | `ACTIVITY_MONITOR_SOURCE` | `opencode` | opencode plugin |
-| `ACTIVITY_MONITOR_ACTOR` | `$USER` / `$USERNAME` | opencode plugin |
+| `ACTIVITY_MONITOR_ACTOR` | `$USER` / `$USERNAME` | opencode plugin (event `actor`) |
+| `ACTIVITY_MONITOR_DISPLAY_USER` | OS username | all clients (overrides the event `actor`) |
 | `ACTIVITY_MONITOR_ORIGIN` | OS hostname | all clients (origin `host` carried on every event) |
 | `ACTIVITY_MONITOR_TASK` | — | Windows watcher (task stamped on `focus` events) |
 | `ACTIVITY_MONITOR_SHADOW` | — | opencode plugin (silent mode, `1`/`true`/`yes`/`on`) |
@@ -22,6 +23,14 @@ at your server.
 | `ACTIVITY_MONITOR_SSL_INSECURE` | — | all clients (`1` disables verification, dev only) |
 | `ACTIVITY_MONITOR_USERNAME` | — | all clients (HTTP Basic auth username) |
 | `ACTIVITY_MONITOR_PASSWORD` | — | all clients (HTTP Basic auth password) |
+
+## Display user
+
+Every client stamps each event with the name of the user (`actor`): the watcher uses
+`user`, the opencode plugins use `$USER`/`$USERNAME` (or `ACTIVITY_MONITOR_ACTOR`) and the
+git hooks use the commit author. Set `ACTIVITY_MONITOR_DISPLAY_USER` to override that name
+on every event regardless of source, so one readable handle (e.g. `sildr`) shows up across
+the whole timeline. The git author is still kept on the event as `data.author`.
 
 ## Origin host
 

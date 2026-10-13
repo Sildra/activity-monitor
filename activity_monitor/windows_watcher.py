@@ -120,6 +120,15 @@ def env_task() -> str | None:
     return os.environ.get("ACTIVITY_MONITOR_TASK") or None
 
 
+def env_user() -> str | None:
+    """Display name for the user (``ACTIVITY_MONITOR_DISPLAY_USER``), if set.
+
+    Overrides the actor stamped on events so the timeline shows a readable name
+    instead of the machine login.
+    """
+    return os.environ.get("ACTIVITY_MONITOR_DISPLAY_USER") or None
+
+
 def build_auth_header() -> str | None:
     """HTTP Basic `Authorization` header from `ACTIVITY_MONITOR_USERNAME`/`_PASSWORD`."""
     username = os.environ.get("ACTIVITY_MONITOR_USERNAME")
@@ -291,7 +300,7 @@ class WindowsWatcher:
         sink: EventSink,
         *,
         source: str = "windows",
-        actor: str = "user",
+        actor: str | None = None,
         task: str | None = None,
         poll: float = 1.0,
         idle_minutes: float = 2.0,
@@ -300,7 +309,7 @@ class WindowsWatcher:
     ) -> None:
         self._sink = sink
         self.source = source
-        self.actor = actor
+        self.actor = actor or env_user() or "user"
         self.host = local_host()
         self.task = task or env_task()
         self.poll = poll
@@ -535,7 +544,7 @@ def start_database_watcher(
     *,
     loop: asyncio.AbstractEventLoop,
     source: str | None = None,
-    actor: str = "user",
+    actor: str | None = None,
     poll: float = 1.0,
     idle_minutes: float = 2.0,
     skew_seconds: float = DEFAULT_SKEW_SECONDS,
@@ -567,7 +576,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"activity monitor backend root (default $ACTIVITY_MONITOR_PORT, currently {default_base_url()})",
     )
     parser.add_argument("--source", default="windows", help="source name to push under (must exist as Push)")
-    parser.add_argument("--actor", default="user")
+    parser.add_argument("--actor", default=None, help="event actor (default $ACTIVITY_MONITOR_DISPLAY_USER or 'user')")
     parser.add_argument("--poll", type=float, default=1.0, help="sample interval in seconds")
     parser.add_argument("--idle-minutes", type=float, default=2.0, help="idle threshold in minutes")
     parser.add_argument(

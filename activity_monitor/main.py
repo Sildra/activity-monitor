@@ -86,7 +86,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                 poll=float(settings.get("poll", 1.0)),
                 idle_minutes=float(settings.get("idle_minutes", 2.0)),
                 skew_seconds=float(settings.get("skew_seconds", DEFAULT_SKEW_SECONDS)),
-                actor=str(settings.get("actor", "user")),
+                actor=settings.get("actor"),
                 verbose=bool(settings.get("verbose", False)),
             )
 

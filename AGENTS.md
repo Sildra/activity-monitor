@@ -48,8 +48,9 @@ React/TS/Vite frontend, single server serving the built frontend.
   `git config core.hooksPath <repo>/plugins/git`; `plugins/README.md` documents client setup. Every
   client (plugin, standalone watcher, hooks) reads `ACTIVITY_MONITOR_URL` (plus the optional
   `ACTIVITY_MONITOR_CA_CERT`/`_CLIENT_CERT`/`_CLIENT_KEY` mTLS,
-  `ACTIVITY_MONITOR_USERNAME`/`_PASSWORD` basic-auth variables and `ACTIVITY_MONITOR_ORIGIN` to
-  override the origin `host`) and legacy
+  `ACTIVITY_MONITOR_USERNAME`/`_PASSWORD` basic-auth variables, `ACTIVITY_MONITOR_ORIGIN` to
+  override the origin `host`, and `ACTIVITY_MONITOR_DISPLAY_USER` to override the event `actor`)
+  and legacy
   `ACTIVITY_MONITOR_PORT` (default 8001); the
   backend also uses it as the port default when `--port` is not passed.
 - `pyproject.toml` — metadata, deps, ruff config, hatchling build, scripts `activity-monitor` +
@@ -59,7 +60,8 @@ React/TS/Vite frontend, single server serving the built frontend.
   window (`GetForegroundWindow`), input-idle time (`GetLastInputInfo`) and lock state
   (`OpenInputDesktop`), emitting `focus` / `idle.start` / `idle.end` / `lock` / `unlock` transitions
   (the `windows` Push source). Stdlib `ctypes` only; each event carries a unique `id` so re-sends
-  dedupe, plus a `host` (`ACTIVITY_MONITOR_ORIGIN` or the OS hostname). Each `focus` event's `task`
+  dedupe, plus a `host` (`ACTIVITY_MONITOR_ORIGIN` or the OS hostname) and an `actor`
+  (`ACTIVITY_MONITOR_DISPLAY_USER` or `--actor`, else `user`). Each `focus` event's `task`
   is the foreground process name, or `ACTIVITY_MONITOR_TASK` when set — the desktop counterpart of
   the git `TASK_PATTERN` / opencode `/task`, so one task ties the sources together. Each tick also
   compares the wall clock against the unbiased interrupt-time count

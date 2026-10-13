@@ -205,6 +205,7 @@ same variables and support HTTPS + mTLS + basic auth (see `plugins/README.md`):
 | `ACTIVITY_MONITOR_PASSWORD` | HTTP Basic auth password |
 | `ACTIVITY_MONITOR_ORIGIN` | Origin `host` sent with every event (default: the machine hostname) |
 | `ACTIVITY_MONITOR_TASK` | Windows watcher: task stamped on desktop `focus` events (default: the process) |
+| `ACTIVITY_MONITOR_DISPLAY_USER` | Event `actor` sent by every client (default: `user` / `$USER` / `$USERNAME` / git author) |
 
 ```powershell
 $env:ACTIVITY_MONITOR_URL = "https://localhost:8001"

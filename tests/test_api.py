@@ -86,6 +86,25 @@ def test_git_push_registers_branch_and_commit(tmp_path: Path) -> None:
         assert {event["kind"] for event in client.get("/api/tasks").json()} == {"push", "commit"}
 
 
+def test_git_actor_override_keeps_author(tmp_path: Path) -> None:
+    with make_client(tmp_path, GIT_SOURCE) as client:
+        commit = {
+            "kind": "commit",
+            "repository": "/repo",
+            "commit": "abc123",
+            "message": "hi",
+            "author": "Jane",
+            "actor": "sildr",
+            "timestamp": "2026-01-01T00:00:00Z",
+        }
+
+        assert client.post("/api/ingest/git", json=commit).json() == {"accepted": 1}
+
+        event = client.get("/api/tasks", params={"kind": "commit"}).json()[0]
+        assert event["actor"] == "sildr"
+        assert event["data"]["author"] == "Jane"
+
+
 def test_git_task_derived_from_pattern(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TASK_PATTERN", r"JIRA-[0-9]+")
 

@@ -34,6 +34,7 @@ email=$(git log -1 --pretty=%ae 2>/dev/null)
 timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 message=$(git log -1 --pretty=%s 2>/dev/null)
 host="${ACTIVITY_MONITOR_ORIGIN:-$(hostname 2>/dev/null)}"
+actor="${ACTIVITY_MONITOR_DISPLAY_USER:-$author}"
 
 json_escape() {
     printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n'
@@ -43,9 +44,10 @@ json_field() {
     printf '"%s"' "$(json_escape "$1")"
 }
 
-payload=$(printf '{"repository":%s,"host":%s,"commit":%s,"branch":%s,"author":%s,"email":%s,"timestamp":%s,"message":%s}' \
+payload=$(printf '{"repository":%s,"host":%s,"actor":%s,"commit":%s,"branch":%s,"author":%s,"email":%s,"timestamp":%s,"message":%s}' \
     "$(json_field "$repo")" \
     "$(json_field "$host")" \
+    "$(json_field "$actor")" \
     "$(json_field "$commit")" \
     "$(json_field "$branch")" \
     "$(json_field "$author")" \

@@ -331,7 +331,7 @@ class GitHistorySource(SourceProvider):
         return make_event(
             kind=kind,
             timestamp=parse_timestamp(raw.get("timestamp")),
-            actor=str(raw.get("author") or self.actor),
+            actor=str(raw.get("actor") or raw.get("author") or self.actor),
             task=derive_task(message, branch) or (Path(repository).name or None),
             title=title,
             detail=detail,
@@ -344,6 +344,7 @@ class GitHistorySource(SourceProvider):
                 "reference": reference or None,
                 "remote": remote or None,
                 "previous": raw.get("previous"),
+                "author": raw.get("author"),
                 "email": raw.get("email"),
             },
             dedup_key=dedup_key,

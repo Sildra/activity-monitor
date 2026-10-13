@@ -75,7 +75,11 @@ const getPid = (): string => {
 };
 
 const defaultActor = (): string =>
-    envVar("ACTIVITY_MONITOR_ACTOR") ?? envVar("USER") ?? envVar("USERNAME") ?? "opencode";
+    envVar("ACTIVITY_MONITOR_DISPLAY_USER") ??
+    envVar("ACTIVITY_MONITOR_ACTOR") ??
+    envVar("USER") ??
+    envVar("USERNAME") ??
+    "opencode";
 
 const envShadow = (): boolean =>
     ["1", "true", "yes", "on"].includes((envVar("ACTIVITY_MONITOR_SHADOW") ?? "").toLowerCase());
