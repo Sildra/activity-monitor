@@ -361,13 +361,21 @@ function RowLabel({ label, detail }: { label: string; detail: string }) {
 
 const ATTENTION_COLORS = { asked: "#f59e0b", approved: "#22c55e", denied: "#ef4444", question: "#8b5cf6" };
 
+/** The plugin's own payload, stored under `data.raw.data` by `PushSource.parse`. */
+function eventPayload(event: UnifiedTimelineEvent): Record<string, unknown> {
+    const raw = event.data?.raw as { data?: Record<string, unknown> } | undefined;
+
+    return raw?.data ?? {};
+}
+
 function attentionMark(event: UnifiedTimelineEvent): { glyph: string; color: string; label: string } | null {
     if (event.kind === "permission.asked") {
         return { glyph: "?", color: ATTENTION_COLORS.asked, label: "Permission requested" };
     }
 
     if (event.kind === "permission.replied") {
-        const denied = event.data?.status === "denied" || event.data?.reply === "reject";
+        const payload = eventPayload(event);
+        const denied = payload.status === "denied" || payload.reply === "reject";
 
         return denied
             ? { glyph: "\u2717", color: ATTENTION_COLORS.denied, label: "Permission denied" }
@@ -379,7 +387,7 @@ function attentionMark(event: UnifiedTimelineEvent): { glyph: string; color: str
     }
 
     if (event.kind === "question.replied") {
-        const dismissed = event.data?.status === "dismissed";
+        const dismissed = eventPayload(event).status === "dismissed";
 
         return dismissed
             ? { glyph: "\u2717", color: ATTENTION_COLORS.denied, label: "Question dismissed" }
