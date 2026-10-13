@@ -110,6 +110,16 @@ def local_host() -> str:
     return os.environ.get("ACTIVITY_MONITOR_ORIGIN") or socket.gethostname()
 
 
+def env_task() -> str | None:
+    """Explicit task for desktop events (``ACTIVITY_MONITOR_TASK``), if set.
+
+    Tasks tie activity together across sources; setting this tags every ``focus``
+    event (e.g. a Jira id) instead of the foreground process name, so desktop
+    activity groups with the matching git commits and opencode prompts.
+    """
+    return os.environ.get("ACTIVITY_MONITOR_TASK") or None
+
+
 def build_auth_header() -> str | None:
     """HTTP Basic `Authorization` header from `ACTIVITY_MONITOR_USERNAME`/`_PASSWORD`."""
     username = os.environ.get("ACTIVITY_MONITOR_USERNAME")
@@ -282,6 +292,7 @@ class WindowsWatcher:
         *,
         source: str = "windows",
         actor: str = "user",
+        task: str | None = None,
         poll: float = 1.0,
         idle_minutes: float = 2.0,
         skew_seconds: float = DEFAULT_SKEW_SECONDS,
@@ -291,6 +302,7 @@ class WindowsWatcher:
         self.source = source
         self.actor = actor
         self.host = local_host()
+        self.task = task or env_task()
         self.poll = poll
         self.idle_threshold = timedelta(minutes=idle_minutes)
         self.skew_threshold = skew_seconds
@@ -404,7 +416,7 @@ class WindowsWatcher:
                     kind="focus",
                     timestamp=now,
                     title=previous["title"],
-                    task=previous["process"],
+                    task=self.task or previous["process"],
                     detail=previous["image"] or f"pid {previous['pid']}",
                     duration_ms=max(0.0, (now - self._focus_start).total_seconds()) * 1000.0,
                 )
@@ -418,7 +430,7 @@ class WindowsWatcher:
                     kind="focus",
                     timestamp=now,
                     title=current["title"],
-                    task=current["process"],
+                    task=self.task or current["process"],
                     detail=current["image"] or f"pid {current['pid']}",
                 )
 
@@ -459,7 +471,7 @@ class WindowsWatcher:
                 kind="focus",
                 timestamp=now,
                 title=self._focus["title"],
-                task=self._focus["process"],
+                task=self.task or self._focus["process"],
                 detail=self._focus["image"] or f"pid {self._focus['pid']}",
                 duration_ms=max(0.0, duration),
             )

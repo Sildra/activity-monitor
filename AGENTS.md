@@ -59,7 +59,10 @@ React/TS/Vite frontend, single server serving the built frontend.
   window (`GetForegroundWindow`), input-idle time (`GetLastInputInfo`) and lock state
   (`OpenInputDesktop`), emitting `focus` / `idle.start` / `idle.end` / `lock` / `unlock` transitions
   (the `windows` Push source). Stdlib `ctypes` only; each event carries a unique `id` so re-sends
-  dedupe, plus a `host` (`ACTIVITY_MONITOR_ORIGIN` or the OS hostname). Each tick also compares the wall clock against the unbiased interrupt-time count
+  dedupe, plus a `host` (`ACTIVITY_MONITOR_ORIGIN` or the OS hostname). Each `focus` event's `task`
+  is the foreground process name, or `ACTIVITY_MONITOR_TASK` when set — the desktop counterpart of
+  the git `TASK_PATTERN` / opencode `/task`, so one task ties the sources together. Each tick also
+  compares the wall clock against the unbiased interrupt-time count
   (`QueryUnbiasedInterruptTime`, which stops during sleep) and, on a divergence over `skew_seconds`
   (default 30), enters the locked state at the last pre-sleep tick — closed by the normal lock
   handling at wake (session woke unlocked) or at the real unlock (machine locked to sleep) — so

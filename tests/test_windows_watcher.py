@@ -189,3 +189,30 @@ def test_lock_before_sleep_is_not_doubled(monkeypatch: pytest.MonkeyPatch) -> No
 
     unlock = next(event for event in events if event["kind"] == "unlock")
     assert unlock["duration_ms"] == pytest.approx(3_605_000.0)
+
+
+# -- event task ---------------------------------------------------------------
+
+
+def test_task_env_sets_focus_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ACTIVITY_MONITOR_TASK", "JIRA-123")
+    events: list[dict[str, Any]] = []
+    watcher = make_watcher(events)
+    FakeDesktop(monkeypatch, load_watcher_module())
+
+    watcher.tick(BASE)
+
+    focus = [event for event in events if event["kind"] == "focus"]
+    assert [event["task"] for event in focus] == ["JIRA-123"]
+
+
+def test_focus_task_defaults_to_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACTIVITY_MONITOR_TASK", raising=False)
+    events: list[dict[str, Any]] = []
+    watcher = make_watcher(events)
+    FakeDesktop(monkeypatch, load_watcher_module())
+
+    watcher.tick(BASE)
+
+    focus = [event for event in events if event["kind"] == "focus"]
+    assert [event["task"] for event in focus] == ["code.exe"]

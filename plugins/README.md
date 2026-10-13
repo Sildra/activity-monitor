@@ -14,6 +14,7 @@ at your server.
 | `ACTIVITY_MONITOR_SOURCE` | `opencode` | opencode plugin |
 | `ACTIVITY_MONITOR_ACTOR` | `$USER` / `$USERNAME` | opencode plugin |
 | `ACTIVITY_MONITOR_ORIGIN` | OS hostname | all clients (origin `host` carried on every event) |
+| `ACTIVITY_MONITOR_TASK` | — | Windows watcher (task stamped on `focus` events) |
 | `ACTIVITY_MONITOR_SHADOW` | — | opencode plugin (silent mode, `1`/`true`/`yes`/`on`) |
 | `ACTIVITY_MONITOR_CA_CERT` | — | all clients (verify server, private CA) |
 | `ACTIVITY_MONITOR_CLIENT_CERT` | — | all clients (mTLS client certificate) |
@@ -28,6 +29,13 @@ Every client stamps each event with a `host` field naming the machine it ran on:
 watcher, the opencode plugins and the git hooks all send `ACTIVITY_MONITOR_ORIGIN` when
 set, otherwise the local hostname. Set it (e.g. `laptop`) when several machines feed one
 server, so events from different machines can be told apart.
+
+## Task
+
+The Windows watcher stamps each `focus` event's task with the foreground process. Set
+`ACTIVITY_MONITOR_TASK` (e.g. a Jira id) to tag them with that task instead, so desktop
+activity lines up with the matching git commits (`TASK_PATTERN`) and opencode prompts
+(the `/task` command).
 
 ## TLS / mTLS
 
