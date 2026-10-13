@@ -129,34 +129,45 @@ def env_user() -> str | None:
     return os.environ.get("ACTIVITY_MONITOR_DISPLAY_USER") or None
 
 
-def build_auth_header() -> str | None:
-    """HTTP Basic `Authorization` header from `ACTIVITY_MONITOR_USERNAME`/`_PASSWORD`."""
-    username = os.environ.get("ACTIVITY_MONITOR_USERNAME")
+def build_auth_header(username: str | None = None, password: str | None = None) -> str | None:
+    """HTTP Basic `Authorization` header from the arguments or the environment.
+
+    Each value falls back to `ACTIVITY_MONITOR_USERNAME`/`_PASSWORD` when not
+    passed on the command line.
+    """
+    if username is None:
+        username = os.environ.get("ACTIVITY_MONITOR_USERNAME")
 
     if not username:
         return None
 
-    password = os.environ.get("ACTIVITY_MONITOR_PASSWORD") or ""
+    if password is None:
+        password = os.environ.get("ACTIVITY_MONITOR_PASSWORD") or ""
+
     token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
 
     return f"Basic {token}"
 
 
-def build_ssl_context() -> ssl.SSLContext:
+def build_ssl_context(
+    *, cafile: str | None = None, certfile: str | None = None, keyfile: str | None = None, insecure: bool = False
+) -> ssl.SSLContext:
     """TLS context for the standalone watcher (private CA + client certificates).
 
-    - `ACTIVITY_MONITOR_CA_CERT`      - CA bundle used to verify the server.
-    - `ACTIVITY_MONITOR_CLIENT_CERT`  - client certificate (mTLS).
-    - `ACTIVITY_MONITOR_CLIENT_KEY`   - client private key (mTLS).
-    - `ACTIVITY_MONITOR_SSL_INSECURE` - `1|true|yes|on` disables verification (dev only).
+    Arguments come from the CLI flags and fall back to the environment:
+
+    - `--ca-cert` / `ACTIVITY_MONITOR_CA_CERT` - CA bundle used to verify the server.
+    - `--client-cert` / `ACTIVITY_MONITOR_CLIENT_CERT` - client certificate (mTLS).
+    - `--client-key` / `ACTIVITY_MONITOR_CLIENT_KEY` - client private key (mTLS).
+    - `--insecure` / `ACTIVITY_MONITOR_SSL_INSECURE` - disables verification (dev only).
     """
-    cafile = os.environ.get("ACTIVITY_MONITOR_CA_CERT") or None
-    certfile = os.environ.get("ACTIVITY_MONITOR_CLIENT_CERT") or None
-    keyfile = os.environ.get("ACTIVITY_MONITOR_CLIENT_KEY") or None
-    insecure = os.environ.get("ACTIVITY_MONITOR_SSL_INSECURE") or os.environ.get("ACTIVITY_MONITOR_INSECURE") or ""
+    cafile = cafile or os.environ.get("ACTIVITY_MONITOR_CA_CERT") or None
+    certfile = certfile or os.environ.get("ACTIVITY_MONITOR_CLIENT_CERT") or None
+    keyfile = keyfile or os.environ.get("ACTIVITY_MONITOR_CLIENT_KEY") or None
+    env_insecure = os.environ.get("ACTIVITY_MONITOR_SSL_INSECURE") or os.environ.get("ACTIVITY_MONITOR_INSECURE") or ""
     context = ssl.create_default_context(cafile=cafile)
 
-    if insecure.lower() in ("1", "true", "yes", "on"):
+    if insecure or env_insecure.lower() in ("1", "true", "yes", "on"):
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
 
@@ -246,10 +257,21 @@ def foreground_window() -> dict[str, Any] | None:
 class HttpSink:
     """Standalone mode: POST each event to the backend ingest endpoint."""
 
-    def __init__(self, base_url: str, source: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        source: str,
+        *,
+        username: str | None = None,
+        password: str | None = None,
+        cafile: str | None = None,
+        certfile: str | None = None,
+        keyfile: str | None = None,
+        insecure: bool = False,
+    ) -> None:
         self.url = f"{base_url.rstrip('/')}/api/ingest/{source}"
-        self._context = build_ssl_context()
-        self._auth = build_auth_header()
+        self._context = build_ssl_context(cafile=cafile, certfile=certfile, keyfile=keyfile, insecure=insecure)
+        self._auth = build_auth_header(username=username, password=password)
 
     def __call__(self, payload: dict[str, Any]) -> bool:
         headers = {"Content-Type": "application/json"}
@@ -301,6 +323,7 @@ class WindowsWatcher:
         *,
         source: str = "windows",
         actor: str | None = None,
+        host: str | None = None,
         task: str | None = None,
         poll: float = 1.0,
         idle_minutes: float = 2.0,
@@ -310,7 +333,7 @@ class WindowsWatcher:
         self._sink = sink
         self.source = source
         self.actor = actor or env_user() or "user"
-        self.host = local_host()
+        self.host = host or local_host()
         self.task = task or env_task()
         self.poll = poll
         self.idle_threshold = timedelta(minutes=idle_minutes)
@@ -577,6 +600,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--source", default="windows", help="source name to push under (must exist as Push)")
     parser.add_argument("--actor", default=None, help="event actor (default $ACTIVITY_MONITOR_DISPLAY_USER or 'user')")
+    parser.add_argument(
+        "--host", default=None, help="origin host on events (default $ACTIVITY_MONITOR_ORIGIN or the OS hostname)"
+    )
+    parser.add_argument(
+        "--task", default=None, help="task stamped on focus events (default $ACTIVITY_MONITOR_TASK or the process)"
+    )
+    parser.add_argument(
+        "--username", default=None, help="HTTP Basic auth username (default $ACTIVITY_MONITOR_USERNAME)"
+    )
+    parser.add_argument(
+        "--password", default=None, help="HTTP Basic auth password (default $ACTIVITY_MONITOR_PASSWORD)"
+    )
+    parser.add_argument(
+        "--ca-cert", default=None, help="CA bundle used to verify the server (default $ACTIVITY_MONITOR_CA_CERT)"
+    )
+    parser.add_argument(
+        "--client-cert", default=None, help="client certificate for mTLS (default $ACTIVITY_MONITOR_CLIENT_CERT)"
+    )
+    parser.add_argument(
+        "--client-key", default=None, help="client private key for mTLS (default $ACTIVITY_MONITOR_CLIENT_KEY)"
+    )
+    parser.add_argument("--insecure", action="store_true", help="skip TLS verification (development only)")
     parser.add_argument("--poll", type=float, default=1.0, help="sample interval in seconds")
     parser.add_argument("--idle-minutes", type=float, default=2.0, help="idle threshold in minutes")
     parser.add_argument(
@@ -594,10 +639,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     base_url = args.base_url or default_base_url()
+    sink = HttpSink(
+        base_url,
+        args.source,
+        username=args.username,
+        password=args.password,
+        cafile=args.ca_cert,
+        certfile=args.client_cert,
+        keyfile=args.client_key,
+        insecure=args.insecure,
+    )
     watcher = WindowsWatcher(
-        HttpSink(base_url, args.source),
+        sink,
         source=args.source,
         actor=args.actor,
+        host=args.host,
+        task=args.task,
         poll=args.poll,
         idle_minutes=args.idle_minutes,
         skew_seconds=args.skew_seconds,

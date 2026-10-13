@@ -70,7 +70,11 @@ React/TS/Vite frontend, single server serving the built frontend.
   handling at wake (session woke unlocked) or at the real unlock (machine locked to sleep) — so
   sleeping time is not counted as attention. Standalone (`python -m activity_monitor.windows_watcher`)
   it POSTs to `/api/ingest/windows`; embedded (`--watch-windows` / `general.watch_windows`) the backend
-  starts it in-process and it writes straight to the DB via `store_events`. Restart it after editing.
+  starts it in-process and it writes straight to the DB via `store_events`. The standalone
+  watcher also takes flags mirroring every client variable (`--base-url`, `--source`, `--actor`,
+  `--host`, `--task`, `--username`, `--password`, `--ca-cert`, `--client-cert`, `--client-key`,
+  `--insecure`) plus `--poll`/`--idle-minutes`/`--skew-seconds`; a flag wins over its env var.
+  Restart it after editing.
 - `tests/` — pytest (`TestClient`, temp config/db)
 
 ## Backend (FastAPI, Python 3.12)

@@ -211,12 +211,24 @@ $env:ACTIVITY_MONITOR_URL="https://localhost:8001"
 python -m activity_monitor.windows_watcher
 ```
 
-It defaults to `http://127.0.0.1:8001` if no URL is set. Override per run if
-needed:
+It defaults to `http://127.0.0.1:8001` if no URL is set. Every environment
+variable above has a matching flag, and the flag wins when both are set:
 
 ```bash
-python -m activity_monitor.windows_watcher --base-url https://localhost:8001 --poll 1.0 --idle-minutes 2.0 --skew-seconds 30.0 --verbose
+python -m activity_monitor.windows_watcher \
+    --base-url https://localhost:8001 --source windows \
+    --actor sildr --host laptop --task JIRA-1 \
+    --username alice --password s3cret \
+    --ca-cert certs/ca.crt --client-cert certs/client.crt --client-key certs/client.key \
+    --poll 1.0 --idle-minutes 2.0 --skew-seconds 30.0 --verbose
 ```
+
+- `--base-url` / `--source` — backend root and `Push` source name.
+- `--actor` / `--host` / `--task` — event `actor`, origin `host` and `focus` task.
+- `--username` / `--password` — HTTP Basic auth.
+- `--ca-cert` / `--client-cert` / `--client-key` / `--insecure` — TLS / mTLS.
+- `--poll` / `--idle-minutes` / `--skew-seconds` — sampling thresholds.
+- `--run SECONDS` / `--once` / `--verbose` — testing aids.
 
 Alternatively, run it **inside** the backend (`python -m activity_monitor.main
 --watch-windows`, or `general.watch_windows: true` in `config.yaml`): it then

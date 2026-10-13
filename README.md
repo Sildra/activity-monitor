@@ -219,7 +219,10 @@ $env:ACTIVITY_MONITOR_PASSWORD = "s3cret"
 The clients apply these directly:
 
 - **Windows watcher** — builds an `ssl.SSLContext` from the variables above and sends an
-  `Authorization: Basic ...` header.
+  `Authorization: Basic ...` header. The standalone watcher accepts every variable above as
+  a matching flag (`--base-url`, `--actor`, `--host`, `--task`, `--username`, `--password`,
+  `--ca-cert`, `--client-cert`, `--client-key`, `--insecure`); a flag wins over its
+  environment variable.
 - **opencode plugins** — use `node:http`/`node:https` with `ca`, `cert` and `key` options
   and send the `Authorization` header.
 - **git hooks** — pass `--cacert`, `--cert`, `--key` and `-u "$USERNAME:$PASSWORD"` to

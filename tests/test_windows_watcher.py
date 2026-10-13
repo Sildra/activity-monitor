@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -254,3 +255,117 @@ def test_explicit_actor_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
     watcher.tick(BASE)
 
     assert {event["actor"] for event in events} == {"robot"}
+
+
+# -- command line options -----------------------------------------------------
+
+
+def test_parse_args_defaults() -> None:
+    args = load_watcher_module().parse_args([])
+
+    assert args.base_url is None
+    assert args.source == "windows"
+    assert args.actor is None
+    assert args.host is None
+    assert args.task is None
+    assert args.username is None
+    assert args.password is None
+    assert args.ca_cert is None
+    assert args.client_cert is None
+    assert args.client_key is None
+    assert args.insecure is False
+
+
+def test_parse_args_overrides() -> None:
+    args = load_watcher_module().parse_args(
+        [
+            "--base-url",
+            "https://example:9000",
+            "--source",
+            "desktop",
+            "--actor",
+            "sildr",
+            "--host",
+            "laptop",
+            "--task",
+            "JIRA-1",
+            "--username",
+            "alice",
+            "--password",
+            "s3cret",
+            "--ca-cert",
+            "ca.pem",
+            "--client-cert",
+            "client.pem",
+            "--client-key",
+            "client.key",
+            "--insecure",
+        ]
+    )
+
+    assert args.base_url == "https://example:9000"
+    assert args.source == "desktop"
+    assert args.actor == "sildr"
+    assert args.host == "laptop"
+    assert args.task == "JIRA-1"
+    assert args.username == "alice"
+    assert args.password == "s3cret"
+    assert args.ca_cert == "ca.pem"
+    assert args.client_cert == "client.pem"
+    assert args.client_key == "client.key"
+    assert args.insecure is True
+
+
+def test_host_option_sets_event_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    windows_watcher = load_watcher_module()
+    events: list[dict[str, Any]] = []
+    sink: Callable[[dict[str, Any]], bool] = lambda payload: events.append(payload) or True
+    watcher = windows_watcher.WindowsWatcher(sink, host="laptop")
+    FakeDesktop(monkeypatch, windows_watcher)
+
+    watcher.tick(BASE)
+
+    assert {event["host"] for event in events} == {"laptop"}
+
+
+def test_task_option_sets_focus_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACTIVITY_MONITOR_TASK", raising=False)
+    windows_watcher = load_watcher_module()
+    events: list[dict[str, Any]] = []
+    sink: Callable[[dict[str, Any]], bool] = lambda payload: events.append(payload) or True
+    watcher = windows_watcher.WindowsWatcher(sink, task="JIRA-9")
+    FakeDesktop(monkeypatch, windows_watcher)
+
+    watcher.tick(BASE)
+
+    focus = [event for event in events if event["kind"] == "focus"]
+    assert [event["task"] for event in focus] == ["JIRA-9"]
+
+
+def test_auth_header_prefers_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    windows_watcher = load_watcher_module()
+    monkeypatch.setenv("ACTIVITY_MONITOR_USERNAME", "env")
+    monkeypatch.setenv("ACTIVITY_MONITOR_PASSWORD", "envpass")
+
+    header = windows_watcher.build_auth_header("cli", "clipass")
+
+    token = base64.b64encode(b"cli:clipass").decode("ascii")
+    assert header == f"Basic {token}"
+
+
+def test_auth_header_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    windows_watcher = load_watcher_module()
+    monkeypatch.setenv("ACTIVITY_MONITOR_USERNAME", "env")
+    monkeypatch.setenv("ACTIVITY_MONITOR_PASSWORD", "envpass")
+
+    header = windows_watcher.build_auth_header()
+
+    token = base64.b64encode(b"env:envpass").decode("ascii")
+    assert header == f"Basic {token}"
+
+
+def test_auth_header_none_without_username(monkeypatch: pytest.MonkeyPatch) -> None:
+    windows_watcher = load_watcher_module()
+    monkeypatch.delenv("ACTIVITY_MONITOR_USERNAME", raising=False)
+
+    assert windows_watcher.build_auth_header() is None
