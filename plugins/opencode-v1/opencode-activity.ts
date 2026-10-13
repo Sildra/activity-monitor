@@ -161,6 +161,31 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     const shadowAll = envShadow();
 
     let lastError = "";
+    let connection: "pending" | "ok" | "error" = "pending";
+    let publishedConnection = "";
+
+    // Mirror the connection state into the OpenCode TUI (see tui.tsx). V1 has no
+    // RPC bridge between a plugin's server and TUI halves, so the state is handed
+    // over as a namespaced command on the one server -> TUI channel the SDK
+    // exposes. Best effort: a headless server, or an older client without
+    // `tui.publish`, simply no-ops and the indicator stays idle.
+    const publishConnection = (): void => {
+        const state = shadowAll ? "shadow" : connection;
+
+        if (state === publishedConnection) {
+            return;
+        }
+
+        publishedConnection = state;
+
+        try {
+            void client.tui
+                .publish({ body: { type: "tui.command.execute", properties: { command: `activity-monitor:${state}` } } })
+                .catch(() => undefined);
+        } catch {
+            // Older clients lack a TUI publisher; ignore.
+        }
+    };
 
     const toast = (message: string, variant: "info" | "warning" | "error"): void => {
         void client.tui
@@ -193,6 +218,8 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
 
                 if (response.ok) {
                     lastError = "";
+                    connection = "ok";
+                    publishConnection();
 
                     return true;
                 }
@@ -206,6 +233,8 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
         }
 
         report(failure);
+        connection = "error";
+        publishConnection();
 
         return false;
     };
@@ -225,6 +254,10 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
         8,
         1000,
     );
+
+    // Also fires when shadowed (post() returns early then) so the indicator
+    // settles before the first beat.
+    publishConnection();
 
     interval = setInterval(() => {
         beat();
@@ -285,7 +318,7 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
             // so the model receives the real text; the turn is still not reported.
             const prefixPart = output.parts.find((part) => part.type === "text" && /^\s*\/shadow\b\s*/i.test(part.text));
 
-            if (prefixPart !== undefined) {
+            if (prefixPart !== undefined && prefixPart.type === "text") {
                 prefixPart.text = prefixPart.text.replace(/^\s*\/shadow\b\s*/i, "");
             }
 

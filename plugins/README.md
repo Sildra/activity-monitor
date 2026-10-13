@@ -107,7 +107,8 @@ event list):
   plugin directory; the entry point is `index.ts`). It is built on the V2 plugin
   API (`@opencode/plugin`).
 - **`opencode-v1/opencode-activity.ts`** — the legacy plugin for OpenCode 1
-  (`@opencode-ai/plugin`). V1 plugin implementations do not run on OpenCode 2.
+  (`@opencode-ai/plugin`; the server half), with its TUI indicator in
+  `opencode-v1/tui.tsx`. V1 plugin implementations do not run on OpenCode 2.
 
 This repo ships an `opencode.json` that enables the V2 plugin:
 
@@ -209,8 +210,33 @@ which the OpenCode CLI loads automatically because the plugin directory is in
 `opencode.json` — subscribes to that RPC and renders the indicator. The sidebar
 is only shown for a session and when the terminal is wide enough to fit it. This
 is an OpenCode-only affordance: nothing about it is sent to the Activity Monitor
-or shown in its web UI. OpenCode 1 has no RPC bridge between its plugin halves,
-so the V1 plugin does not expose this state.
+or shown in its web UI.
+
+### TUI status indicator (V1)
+
+The V1 plugin shows the same indicator, but as a **separate file**
+(`opencode-v1/tui.tsx`): OpenCode 1 loads a TUI plugin from its own module, and a
+module may export `server` or `tui`, never both. It renders the same single
+coloured `Activity Monitor` line right after the MCP section (green = last report
+succeeded, red = failed, gray = shadow/pending).
+
+Load it from `tui.json` (the TUI plugin list; paths resolve relative to that
+file, so use an absolute path to share one clone):
+
+```json
+{
+  "$schema": "https://opencode.ai/tui.json",
+  "plugin": ["./plugins/opencode-v1/tui.tsx"]
+}
+```
+
+V1 has no RPC bridge between a plugin's server and TUI halves, so
+`opencode-activity.ts` hands the state to `tui.tsx` over the one server→TUI
+channel the SDK exposes: it publishes a namespaced `tui.command.execute` event
+(`activity-monitor:ok`, `:error`, `:shadow` or `:pending`), and `tui.tsx`
+subscribes to that event and renders the line. The publish is best-effort — a
+headless server (or an older client without `tui.publish`) simply never updates
+the indicator. As with V2, nothing about it is sent to the Activity Monitor.
 
 ## Standalone Windows monitor
 

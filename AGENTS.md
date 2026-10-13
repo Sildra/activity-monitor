@@ -41,7 +41,11 @@ React/TS/Vite frontend, single server serving the built frontend.
   submits a prompt, so no model turn happens; it records a `task.set` event and pins subsequent
   prompts of that session to the id (a `sessionTasks` map; `/task` alone clears it). `opencode-v1/`
   holds the legacy V1 implementation (`@opencode-ai/plugin`, `command.execute.before` + throw to
-  abort) for OpenCode 1 — V1 plugins do not run on V2. `index.ts` also tracks the connection state
+  abort) for OpenCode 1 — V1 plugins do not run on V2. Its sidebar indicator is a separate,
+  target-exclusive TUI module (`tui.tsx`, loaded from `tui.json`) that subscribes to a namespaced
+  `tui.command.execute` event the server half publishes
+  (`activity-monitor:<pending|ok|error|shadow>`), since V1 has no server↔TUI RPC bridge.
+  `index.ts` also tracks the connection state
   (`pending`/`ok`/`error`, or `shadow` while silent) and publishes it over the plugin RPC contract
   in `rpc.ts`; `tui.tsx` (the package's `./tui` entry, loaded by the CLI automatically) subscribes to
   it and renders a single coloured `● Activity Monitor` row in the TUI sidebar (`sidebar.content`,
