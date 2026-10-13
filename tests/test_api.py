@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
@@ -695,3 +696,52 @@ def test_basic_auth_rejects_malformed_header(tmp_path: Path) -> None:
 def test_basic_auth_leaves_docs_public(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE, basic_auth=AUTH) as client:
         assert client.get("/openapi.json").status_code == 200
+
+
+def test_ingest_records_origin_host(tmp_path: Path) -> None:
+    with make_client(tmp_path, PUSH_SOURCE) as client:
+        event = {"id": "1", "host": "laptop", "title": "x"}
+        assert client.post("/api/ingest/opencode", json=event).json() == {"accepted": 1}
+
+        stored = client.get("/api/tasks").json()[0]
+        assert stored["host"] == "laptop"
+        assert "host" not in stored["data"]["raw"]
+
+
+def test_ingest_host_defaults_to_hostname(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACTIVITY_MONITOR_ORIGIN", raising=False)
+
+    with make_client(tmp_path, PUSH_SOURCE) as client:
+        client.post("/api/ingest/opencode", json={"id": "1", "title": "x"})
+        assert client.get("/api/tasks").json()[0]["host"] == socket.gethostname()
+
+
+def test_origin_env_overrides_ingest_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ACTIVITY_MONITOR_ORIGIN", "laptop")
+
+    with make_client(tmp_path, PUSH_SOURCE) as client:
+        client.post("/api/ingest/opencode", json={"id": "1", "title": "x"})
+        assert client.get("/api/tasks").json()[0]["host"] == "laptop"
+
+
+def test_host_column_backfilled_for_existing_db(tmp_path: Path) -> None:
+    db_path = tmp_path / "activity.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "create table activityevent ("
+        "id integer primary key, source varchar, kind varchar, actor varchar, task varchar,"
+        "timestamp datetime, duration_ms integer, title varchar, detail varchar,"
+        "tags json, data json, dedup_key varchar)"
+    )
+    conn.commit()
+    conn.close()
+
+    with make_client(tmp_path, PUSH_SOURCE) as client:
+        event = {"id": "1", "host": "laptop", "title": "x"}
+        assert client.post("/api/ingest/opencode", json=event).json() == {"accepted": 1}
+        assert client.get("/api/tasks").json()[0]["host"] == "laptop"
+
+    conn = sqlite3.connect(db_path)
+    columns = {row[1] for row in conn.execute("pragma table_info(activityevent)")}
+    conn.close()
+    assert "host" in columns

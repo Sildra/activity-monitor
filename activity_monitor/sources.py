@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import subprocess
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
@@ -63,6 +64,15 @@ def dedup(*parts: Any) -> str:
     return hashlib.sha1(payload.encode("utf-8", errors="replace")).hexdigest()
 
 
+def local_host() -> str:
+    """Hostname of the machine that produced an event.
+
+    Overridable with ``ACTIVITY_MONITOR_ORIGIN`` (e.g. ``laptop``); falls back to the
+    OS hostname so every event carries where it came from.
+    """
+    return os.environ.get("ACTIVITY_MONITOR_ORIGIN") or socket.gethostname()
+
+
 def derive_task(*candidates: str | None) -> str | None:
     """Extract a task key (e.g. a Jira id) from the first candidate that matches.
 
@@ -97,6 +107,7 @@ def make_event(
     timestamp: datetime | None,
     actor: str,
     dedup_key: str,
+    host: str | None = None,
     title: str | None = None,
     detail: str | None = None,
     task: str | None = None,
@@ -108,6 +119,7 @@ def make_event(
         "kind": kind,
         "timestamp": timestamp or datetime.now(UTC),
         "actor": actor,
+        "host": host or local_host(),
         "task": task,
         "title": title,
         "detail": detail,
@@ -147,6 +159,7 @@ class PushSource(SourceProvider):
         timestamp = parse_timestamp(stored.pop("timestamp", None) or stored.pop("time", None))
         kind = str(stored.pop("kind", None) or stored.pop("type", None) or "event")
         actor = str(stored.pop("actor", None) or stored.pop("user", None) or self.actor)
+        host = str(stored.pop("host", None) or "")
         task = stored.pop("task", None)
         title = stored.pop("title", None) or stored.pop("summary", None)
         detail = stored.pop("detail", None) or stored.pop("message", None)
@@ -158,6 +171,7 @@ class PushSource(SourceProvider):
             kind=kind,
             timestamp=timestamp,
             actor=actor,
+            host=host,
             task=task,
             title=title,
             detail=detail,

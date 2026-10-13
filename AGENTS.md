@@ -47,8 +47,9 @@ React/TS/Vite frontend, single server serving the built frontend.
   prior sha as a distinct `push` event (`GitHistorySource.parse` branches on `kind`). Install with
   `git config core.hooksPath <repo>/plugins/git`; `plugins/README.md` documents client setup. Every
   client (plugin, standalone watcher, hooks) reads `ACTIVITY_MONITOR_URL` (plus the optional
-  `ACTIVITY_MONITOR_CA_CERT`/`_CLIENT_CERT`/`_CLIENT_KEY` mTLS and
-  `ACTIVITY_MONITOR_USERNAME`/`_PASSWORD` basic-auth variables) and legacy
+  `ACTIVITY_MONITOR_CA_CERT`/`_CLIENT_CERT`/`_CLIENT_KEY` mTLS,
+  `ACTIVITY_MONITOR_USERNAME`/`_PASSWORD` basic-auth variables and `ACTIVITY_MONITOR_ORIGIN` to
+  override the origin `host`) and legacy
   `ACTIVITY_MONITOR_PORT` (default 8001); the
   backend also uses it as the port default when `--port` is not passed.
 - `pyproject.toml` — metadata, deps, ruff config, hatchling build, scripts `activity-monitor` +
@@ -58,7 +59,7 @@ React/TS/Vite frontend, single server serving the built frontend.
   window (`GetForegroundWindow`), input-idle time (`GetLastInputInfo`) and lock state
   (`OpenInputDesktop`), emitting `focus` / `idle.start` / `idle.end` / `lock` / `unlock` transitions
   (the `windows` Push source). Stdlib `ctypes` only; each event carries a unique `id` so re-sends
-  dedupe. Each tick also compares the wall clock against the unbiased interrupt-time count
+  dedupe, plus a `host` (`ACTIVITY_MONITOR_ORIGIN` or the OS hostname). Each tick also compares the wall clock against the unbiased interrupt-time count
   (`QueryUnbiasedInterruptTime`, which stops during sleep) and, on a divergence over `skew_seconds`
   (default 30), enters the locked state at the last pre-sleep tick — closed by the normal lock
   handling at wake (session woke unlocked) or at the real unlock (machine locked to sleep) — so
@@ -83,23 +84,27 @@ React/TS/Vite frontend, single server serving the built frontend.
   are compared with `secrets.compare_digest`; a mismatch returns `401` + `WWW-Authenticate: Basic`.
   The static UI and the OpenAPI docs stay public. All external clients send the
   `ACTIVITY_MONITOR_USERNAME`/`ACTIVITY_MONITOR_PASSWORD` variables.
-- **Models**: one table `ActivityEvent` (`source`, `kind`, `actor`, `task`, `timestamp`,
+- **Models**: one table `ActivityEvent` (`source`, `kind`, `actor`, `host`, `task`, `timestamp`,
   `duration_ms`, `title`, `detail`, `tags` JSON, `data` JSON, unique `dedup_key`) + `Program`
   (`program_id`, `source`, `host`, `actor`, `started_at`, `last_seen_at`,
   `ended_at`) for running programs. Tables are created at startup via
-  `SQLModel.metadata.create_all` (no migrations).
+  `SQLModel.metadata.create_all`; because there is no migration framework, `db._ensure_columns`
+  back-fills columns added later to existing databases (currently `activityevent.host`).
 - **Timestamps**: store and compare everything in UTC (`datetime.now(UTC)`; `parse_timestamp`
   converts naive inputs assuming local time; `as_utc` re-attaches tz to DB reads). SQLite stores
   datetimes as UTC-wall strings, so naive/aware mixing silently breaks range filters — keep tests
   and calls timezone-consistent.
 - **Sources** (`sources.py`): subclass `SourceProvider`; implement `parse(raw) -> dict`. Set
   `is_pull = True` and override `fetch()` for pull sources. Register the class in `PROVIDERS`.
-  `parse` returns canonical fields via `make_event(...)`; dedup with the `dedup(*parts)` helper.
+  `parse` returns canonical fields via `make_event(...)`, which stamps each event's `host` from
+  `local_host()` (`ACTIVITY_MONITOR_ORIGIN` or the OS hostname) unless the payload supplies one;
+  dedup with the `dedup(*parts)` helper.
   `derive_task(...)` extracts a task key from the first candidate matching the `TASK_PATTERN` env
   regex (git: commit subject, then branch; used by `GitHistorySource.parse`).
   Pull fetches run off the event loop (`asyncio.to_thread`) because `fetch()` is blocking.
 - **Ingest**: idempotent on `dedup_key` (external `id` or payload hash). New events are stored,
-  duplicates ignored. `store_events` in `api.py` is the single write path.
+  duplicates ignored. `store_events` in `api.py` is the single write path. A top-level `host` in the
+  payload is stored on the event (and removed from `data.raw`).
 - **Programs / presence**: `POST /api/programs/start|beat|end` manage live programs. Stale programs
   (silent for `stale_after_seconds`) are closed via `_expire_stale`, which persists `ended_at`.
   `GET /api/timelines/presence` groups programs by `(source, host)` and assigns lane numbers at

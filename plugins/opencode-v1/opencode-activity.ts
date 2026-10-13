@@ -148,7 +148,7 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     };
     const source = opts.source ?? "opencode";
     const programId = opts.programId ?? getPid();
-    const host = hostname();
+    const host = envVar("ACTIVITY_MONITOR_ORIGIN") ?? hostname();
     const pending = new Map<string, Pending>();
     const sessionTasks = new Map<string, string>();
     const shadowSessions = new Set<string>();
@@ -207,7 +207,7 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     };
 
     const ingest = (event: Record<string, unknown>): Promise<boolean> =>
-        post(`/api/ingest/${encodeURIComponent(source)}`, event);
+        post(`/api/ingest/${encodeURIComponent(source)}`, { ...event, host });
 
     const beat = (): Promise<boolean> => post("/api/programs/beat", { program_id: programId });
 

@@ -203,6 +203,7 @@ same variables and support HTTPS + mTLS + basic auth (see `plugins/README.md`):
 | `ACTIVITY_MONITOR_SSL_INSECURE` | `1` to skip verification (development only) |
 | `ACTIVITY_MONITOR_USERNAME` | HTTP Basic auth username |
 | `ACTIVITY_MONITOR_PASSWORD` | HTTP Basic auth password |
+| `ACTIVITY_MONITOR_ORIGIN` | Origin `host` sent with every event (default: the machine hostname) |
 
 ```powershell
 $env:ACTIVITY_MONITOR_URL = "https://localhost:8001"

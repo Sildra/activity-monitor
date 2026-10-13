@@ -313,6 +313,11 @@ export interface components {
             kind: string;
             /** Actor */
             actor: string;
+            /**
+             * Host
+             * @default
+             */
+            host: string;
             /** Task */
             task?: string | null;
             /**

@@ -26,6 +26,7 @@ remote_url="$2"
 repo=$(git rev-parse --show-toplevel 2>/dev/null)
 author=$(git config user.name 2>/dev/null)
 timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+host="${ACTIVITY_MONITOR_ORIGIN:-$(hostname 2>/dev/null)}"
 
 json_escape() {
     printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n'
@@ -51,8 +52,9 @@ while read -r local_ref local_sha remote_ref remote_sha || [ -n "$local_ref" ]; 
         *) branch=$local_ref ;;
     esac
 
-    event=$(printf '{"kind":"push","repository":%s,"branch":%s,"reference":%s,"commit":%s,"previous":%s,"remote":%s,"url":%s,"author":%s,"timestamp":%s}' \
+    event=$(printf '{"kind":"push","repository":%s,"host":%s,"branch":%s,"reference":%s,"commit":%s,"previous":%s,"remote":%s,"url":%s,"author":%s,"timestamp":%s}' \
         "$(json_field "$repo")" \
+        "$(json_field "$host")" \
         "$(json_field "$branch")" \
         "$(json_field "$local_ref")" \
         "$(json_field "$local_sha")" \

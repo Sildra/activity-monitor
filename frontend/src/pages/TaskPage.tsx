@@ -288,6 +288,7 @@ export default function TaskPage() {
                                     </Typography>
                                     <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
                                         {event.actor}
+                                        {event.host ? ` @${event.host}` : ""}
                                         {event.task ? ` · ${event.task}` : ""}
                                     </Typography>
                                 </Box>

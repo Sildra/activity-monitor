@@ -19,6 +19,7 @@ class ActivityEvent(SQLModel, table=True):
     source: str = Field(index=True)
     kind: str = Field(index=True)
     actor: str = Field(index=True, default="user")
+    host: str = Field(index=True, default="")
     task: str | None = Field(default=None, index=True)
     timestamp: datetime = Field(index=True)
 
@@ -36,6 +37,7 @@ class EventOut(BaseModel):
     source: str
     kind: str
     actor: str
+    host: str = ""
     task: str | None = None
     timestamp: datetime
     duration_ms: int | None = None
@@ -51,6 +53,7 @@ class EventOut(BaseModel):
             source=event.source,
             kind=event.kind,
             actor=event.actor,
+            host=event.host or "",
             task=event.task,
             duration_ms=event.duration_ms,
             title=event.title,

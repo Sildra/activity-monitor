@@ -45,6 +45,7 @@ import ctypes
 import ctypes.wintypes as wt
 import json
 import os
+import socket
 import ssl
 import threading
 import time
@@ -102,6 +103,11 @@ def default_base_url() -> str:
     """Backend root for the standalone watcher."""
     url = os.environ.get("ACTIVITY_MONITOR_URL") or "http://127.0.0.1:8001"
     return url.rstrip("/")
+
+
+def local_host() -> str:
+    """Origin host for events: ``ACTIVITY_MONITOR_ORIGIN`` or the OS hostname."""
+    return os.environ.get("ACTIVITY_MONITOR_ORIGIN") or socket.gethostname()
 
 
 def build_auth_header() -> str | None:
@@ -284,6 +290,7 @@ class WindowsWatcher:
         self._sink = sink
         self.source = source
         self.actor = actor
+        self.host = local_host()
         self.poll = poll
         self.idle_threshold = timedelta(minutes=idle_minutes)
         self.skew_threshold = skew_seconds
@@ -315,6 +322,7 @@ class WindowsWatcher:
             "kind": kind,
             "timestamp": timestamp.isoformat(timespec="milliseconds"),
             "actor": self.actor,
+            "host": self.host,
             **fields,
         }
         self._pending.append(payload)

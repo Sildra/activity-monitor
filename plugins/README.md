@@ -13,6 +13,7 @@ at your server.
 | `ACTIVITY_MONITOR_BASE_URL` | `http://localhost:$ACTIVITY_MONITOR_PORT` | legacy fallback for opencode plugins |
 | `ACTIVITY_MONITOR_SOURCE` | `opencode` | opencode plugin |
 | `ACTIVITY_MONITOR_ACTOR` | `$USER` / `$USERNAME` | opencode plugin |
+| `ACTIVITY_MONITOR_ORIGIN` | OS hostname | all clients (origin `host` carried on every event) |
 | `ACTIVITY_MONITOR_SHADOW` | — | opencode plugin (silent mode, `1`/`true`/`yes`/`on`) |
 | `ACTIVITY_MONITOR_CA_CERT` | — | all clients (verify server, private CA) |
 | `ACTIVITY_MONITOR_CLIENT_CERT` | — | all clients (mTLS client certificate) |
@@ -20,6 +21,13 @@ at your server.
 | `ACTIVITY_MONITOR_SSL_INSECURE` | — | all clients (`1` disables verification, dev only) |
 | `ACTIVITY_MONITOR_USERNAME` | — | all clients (HTTP Basic auth username) |
 | `ACTIVITY_MONITOR_PASSWORD` | — | all clients (HTTP Basic auth password) |
+
+## Origin host
+
+Every client stamps each event with a `host` field naming the machine it ran on: the
+watcher, the opencode plugins and the git hooks all send `ACTIVITY_MONITOR_ORIGIN` when
+set, otherwise the local hostname. Set it (e.g. `laptop`) when several machines feed one
+server, so events from different machines can be told apart.
 
 ## TLS / mTLS
 

@@ -185,7 +185,7 @@ export default Plugin.define({
         };
         const source = opts.source ?? "opencode";
         const programId = opts.programId ?? getPid();
-        const host = hostname();
+        const host = envVar("ACTIVITY_MONITOR_ORIGIN") ?? hostname();
         const directory = ctx.location.directory;
         const pending = new Map<string, Pending>();
         const sessionTasks = new Map<string, string>();
@@ -240,7 +240,7 @@ export default Plugin.define({
         };
 
         const ingest = (event: Record<string, unknown>): Promise<boolean> =>
-            post(`/api/ingest/${encodeURIComponent(source)}`, event);
+            post(`/api/ingest/${encodeURIComponent(source)}`, { ...event, host });
 
         const beat = (): Promise<boolean> => post("/api/programs/beat", { program_id: programId });
 
