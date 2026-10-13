@@ -4,6 +4,7 @@ import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { hostname } from "node:os";
 import { Plugin } from "@opencode/plugin";
+import { ActivityMonitor } from "./rpc.js";
 
 type Options = {
     baseUrl?: string;
@@ -40,6 +41,8 @@ type QuestionField = {
     type?: string;
     options?: Array<{ value?: string; label?: string; description?: string }>;
 };
+
+type ConnectionState = "pending" | "ok" | "error";
 
 // The `question` tool renders each question as a form field (see opencode's
 // QuestionTool): the field `description` is the question, `title` is the short
@@ -199,6 +202,36 @@ export default Plugin.define({
         const questionPending = new Map<string, QuestionPending>();
         const shadowAll = envShadow();
 
+        // The state surfaced to the TUI footer. `shadow` is derived below rather
+        // than stored, so a global or per-turn shadow always wins over the last
+        // request outcome.
+        const connection = { state: "pending" as ConnectionState, message: "" };
+        let emitState: ((data: { state: string; message: string }) => void) | undefined;
+        let publishedState = "";
+
+        const currentState = (): { state: string; message: string } =>
+            shadowAll || shadowTurns.size > 0
+                ? { state: "shadow", message: "" }
+                : { state: connection.state, message: connection.message };
+
+        const publishState = (): void => {
+            const next = currentState();
+            const key = `${next.state}\u001f${next.message}`;
+
+            if (key === publishedState) {
+                return;
+            }
+
+            publishedState = key;
+            emitState?.(next);
+        };
+
+        const setConnection = (state: ConnectionState, message: string): void => {
+            connection.state = state;
+            connection.message = message;
+            publishState();
+        };
+
         let lastError = "";
 
         const report = (message: string): void => {
@@ -209,6 +242,23 @@ export default Plugin.define({
             lastError = message;
             console.warn(`[activity-monitor] ${message}`);
         };
+
+        // Expose the state to the TUI plugin over the shared RPC contract so the
+        // OpenCode footer can render it (see tui.tsx). Best effort: older builds
+        // without the RPC domain must not break the rest of the plugin.
+        try {
+            const registration = await ctx.rpc.register(ActivityMonitor, {
+                status: async () => currentState(),
+            });
+
+            emitState = (data) => {
+                void registration.events.emit("state", data);
+            };
+        } catch (error) {
+            report(`rpc registration failed: ${(error as Error).message}`);
+        }
+
+        publishState();
 
         const sessionTask = (sessionID: string | undefined): string =>
             (sessionID !== undefined ? sessionTasks.get(sessionID) : undefined) ?? projectName(directory);
@@ -226,6 +276,7 @@ export default Plugin.define({
 
                     if (response.ok) {
                         lastError = "";
+                        setConnection("ok", "");
 
                         return true;
                     }
@@ -239,6 +290,7 @@ export default Plugin.define({
             }
 
             report(failure);
+            setConnection("error", failure);
 
             return false;
         };
@@ -439,7 +491,9 @@ export default Plugin.define({
 
                     const sessionID = event.data.sessionID;
 
-                    shadowTurns.delete(sessionID);
+                    if (shadowTurns.delete(sessionID)) {
+                        publishState();
+                    }
 
                     for (const [requestID, permission] of permissionPending) {
                         if (permission.sessionID === sessionID) {
@@ -496,6 +550,7 @@ export default Plugin.define({
 
             if (turnShadowed) {
                 shadowTurns.add(event.sessionID);
+                publishState();
             }
 
             if (!text || shadowAll || turnShadowed) {

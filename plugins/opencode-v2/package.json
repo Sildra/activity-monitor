@@ -3,14 +3,29 @@
   "private": true,
   "type": "module",
   "description": "OpenCode 2 plugin reporting program lifecycle + prompts to the Activity Monitor",
+  "exports": {
+    ".": "./index.ts",
+    "./tui": "./tui.tsx",
+    "./rpc": "./rpc.ts",
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "typecheck": "tsc -p ."
   },
   "dependencies": {
     "@opencode/plugin": "2.0.26"
   },
+  "peerDependencies": {
+    "@opentui/core": ">=0.5.17",
+    "@opentui/solid": ">=0.5.17",
+    "solid-js": ">=1.9.0"
+  },
   "devDependencies": {
+    "@opencode/theme": "2.0.26",
+    "@opentui/core": "^0.6.3",
+    "@opentui/solid": "^0.6.3",
     "@types/node": "^26.6.5",
+    "solid-js": "1.9.12",
     "typescript": "^7.0.2"
   }
 }

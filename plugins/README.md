@@ -187,7 +187,29 @@ V2 implementation notes:
 - V2 has no server-side toast API, so plugin errors only reach opencode's logs.
 - The plugin folder pins `@opencode/plugin` in `package.json` so editors can
   type-check it (`npm install` in the folder); the runtime resolves the package
-  itself.
+  itself. The TUI half additionally needs the `@opentui/core` / `@opentui/solid`
+  / `solid-js` peer packages at type-check time (listed as devDependencies); at
+  runtime the OpenCode CLI provides them.
+
+### TUI status indicator (V2)
+
+The V2 plugin also shows its connection state in the OpenCode TUI footer as a
+coloured `● activity-monitor` indicator (`home.footer.status` and
+`prompt.footer.status`):
+
+- **green** — the last report to the Activity Monitor succeeded.
+- **red** — the last report failed (the failure message is in the plugin log).
+- **gray** — the plugin is not reporting (`ACTIVITY_MONITOR_SHADOW`, or a
+  `/shadow` turn in flight) or has not reported yet.
+
+The state lives in the server half of the plugin (`index.ts`), which updates it
+on every `POST` and publishes it over the plugin RPC contract in `rpc.ts` (a
+`status` method plus a `state` event). `tui.tsx` — the package's `./tui` entry,
+which the OpenCode CLI loads automatically because the plugin directory is in
+`opencode.json` — subscribes to that RPC and renders the indicator. This is an
+OpenCode-only affordance: nothing about it is sent to the Activity Monitor or
+shown in its web UI. OpenCode 1 has no RPC bridge between its plugin halves, so
+the V1 plugin does not expose this state.
 
 ## Standalone Windows monitor
 
