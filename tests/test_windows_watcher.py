@@ -25,7 +25,8 @@ def make_watcher(events: list[dict[str, Any]]) -> Any:
     windows_watcher = load_watcher_module()
     sink: Callable[[dict[str, Any]], bool] = lambda payload: events.append(payload) or True
 
-    return windows_watcher.WindowsWatcher(sink, skew_seconds=30.0)
+    # A large heartbeat keeps unrelated tests free of liveness pings.
+    return windows_watcher.WindowsWatcher(sink, skew_seconds=30.0, heartbeat=10_000.0)
 
 
 def kinds(events: list[dict[str, Any]]) -> list[str]:
@@ -192,6 +193,27 @@ def test_lock_before_sleep_is_not_doubled(monkeypatch: pytest.MonkeyPatch) -> No
     assert unlock["duration_ms"] == pytest.approx(3_605_000.0)
 
 
+# -- heartbeat ----------------------------------------------------------------
+
+
+def test_heartbeat_reports_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
+    windows_watcher = load_watcher_module()
+    events: list[dict[str, Any]] = []
+    sink: Callable[[dict[str, Any]], bool] = lambda payload: events.append(payload) or True
+    watcher = windows_watcher.WindowsWatcher(sink, heartbeat=10.0)
+    desktop = FakeDesktop(monkeypatch, windows_watcher)
+
+    watcher.tick(desktop.wall)  # sets the baseline; no ping yet
+    desktop.advance(wall=5)
+    watcher.tick(desktop.wall)  # still within the heartbeat window
+    desktop.advance(wall=5)
+    watcher.tick(desktop.wall)  # 10s elapsed -> one ping
+
+    beats = [event for event in events if event["kind"] == "heartbeat"]
+    assert len(beats) == 1
+    assert beats[0]["timestamp"] == (BASE + timedelta(seconds=10)).isoformat(timespec="milliseconds")
+
+
 # -- event task ---------------------------------------------------------------
 
 
@@ -274,6 +296,7 @@ def test_parse_args_defaults() -> None:
     assert args.client_cert is None
     assert args.client_key is None
     assert args.insecure is False
+    assert args.heartbeat_seconds == 60.0
 
 
 def test_parse_args_overrides() -> None:
@@ -299,6 +322,8 @@ def test_parse_args_overrides() -> None:
             "client.pem",
             "--client-key",
             "client.key",
+            "--heartbeat-seconds",
+            "5",
             "--insecure",
         ]
     )
@@ -314,6 +339,7 @@ def test_parse_args_overrides() -> None:
     assert args.client_cert == "client.pem"
     assert args.client_key == "client.key"
     assert args.insecure is True
+    assert args.heartbeat_seconds == 5.0
 
 
 def test_host_option_sets_event_host(monkeypatch: pytest.MonkeyPatch) -> None:

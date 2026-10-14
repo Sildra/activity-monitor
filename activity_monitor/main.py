@@ -76,7 +76,11 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         watcher_thread = None
 
         if config.watch_windows:
-            from activity_monitor.windows_watcher import DEFAULT_SKEW_SECONDS, start_database_watcher
+            from activity_monitor.windows_watcher import (
+                DEFAULT_HEARTBEAT_SECONDS,
+                DEFAULT_SKEW_SECONDS,
+                start_database_watcher,
+            )
 
             settings = config.source_settings("windows")
             provider = app.state.sources.get("windows") or PushSource("windows", {})
@@ -86,6 +90,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                 poll=float(settings.get("poll", 1.0)),
                 idle_minutes=float(settings.get("idle_minutes", 2.0)),
                 skew_seconds=float(settings.get("skew_seconds", DEFAULT_SKEW_SECONDS)),
+                heartbeat=float(settings.get("heartbeat_seconds", DEFAULT_HEARTBEAT_SECONDS)),
                 actor=settings.get("actor"),
                 verbose=bool(settings.get("verbose", False)),
             )

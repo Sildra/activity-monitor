@@ -9,6 +9,9 @@ Events reported (source must be configured as a Push source, e.g. name `windows`
 
 - `focus`      - foreground window became active (open span); each change closes
                  the previous span carrying its `duration_ms`.
+- `heartbeat`  - emitted every `heartbeat_seconds` while the watcher runs, so the
+                 server can tell the watcher is alive (and clip a span whose
+                 watcher went away).
 - `idle.start` - no keyboard/mouse input for `idle_minutes`; timestamp is the
                  actual moment input stopped.
 - `idle.end`   - input resumed; `duration_ms` is the idle span length.
@@ -97,6 +100,10 @@ EventSink = Callable[[dict[str, Any]], bool]
 
 DEFAULT_PORT = "8001"
 DEFAULT_SKEW_SECONDS = 30.0
+# How often the watcher emits a `heartbeat` liveness event while it runs. The
+# server extends an open focus/idle/lock span only while events keep arriving,
+# so the ping keeps it live without spamming when the state is unchanged.
+DEFAULT_HEARTBEAT_SECONDS = 60.0
 
 
 def default_base_url() -> str:
@@ -328,6 +335,7 @@ class WindowsWatcher:
         poll: float = 1.0,
         idle_minutes: float = 2.0,
         skew_seconds: float = DEFAULT_SKEW_SECONDS,
+        heartbeat: float = DEFAULT_HEARTBEAT_SECONDS,
         verbose: bool = False,
     ) -> None:
         self._sink = sink
@@ -338,6 +346,7 @@ class WindowsWatcher:
         self.poll = poll
         self.idle_threshold = timedelta(minutes=idle_minutes)
         self.skew_threshold = skew_seconds
+        self.heartbeat = timedelta(seconds=heartbeat)
         self.verbose = verbose
 
         self._seq = 0
@@ -356,6 +365,7 @@ class WindowsWatcher:
 
         self._last_wall: datetime | None = None
         self._last_unbiased: float | None = None
+        self._last_beat: datetime | None = None
 
     # -- event plumbing ------------------------------------------------------
 
@@ -431,6 +441,33 @@ class WindowsWatcher:
         # locked to sleep, so a lock that preceded the sleep is never doubled.
         self.enter_lock(last_wall, detail=f"machine suspended ({skew:.0f}s clock skew)")
 
+    def _emit_focus(self, current: dict[str, Any] | None, now: datetime) -> None:
+        """Close the previous focus span and open the next one."""
+        previous = self._focus
+
+        if previous is not None and self._focus_start is not None:
+            self.event(
+                kind="focus",
+                timestamp=now,
+                title=previous["title"],
+                task=self.task or previous["process"],
+                detail=previous["image"] or f"pid {previous['pid']}",
+                duration_ms=max(0.0, (now - self._focus_start).total_seconds()) * 1000.0,
+            )
+
+        self._hwnd = current["hwnd"] if current else None
+        self._focus = current
+        self._focus_start = now if current else None
+
+        if current is not None:
+            self.event(
+                kind="focus",
+                timestamp=now,
+                title=current["title"],
+                task=self.task or current["process"],
+                detail=current["image"] or f"pid {current['pid']}",
+            )
+
     def sample_focus(self, now: datetime) -> None:
         current = foreground_window()
 
@@ -441,30 +478,26 @@ class WindowsWatcher:
             return
 
         if current is None or current["hwnd"] != self._hwnd:
-            previous = self._focus
+            self._emit_focus(current, now)
 
-            if previous is not None and self._focus_start is not None:
-                self.event(
-                    kind="focus",
-                    timestamp=now,
-                    title=previous["title"],
-                    task=self.task or previous["process"],
-                    detail=previous["image"] or f"pid {previous['pid']}",
-                    duration_ms=max(0.0, (now - self._focus_start).total_seconds()) * 1000.0,
-                )
+    def sample_heartbeat(self, now: datetime) -> None:
+        """Emit a periodic liveness ping while the watcher runs.
 
-            self._hwnd = current["hwnd"] if current else None
-            self._focus = current
-            self._focus_start = now if current else None
+        An open focus/idle/lock span carries no closing event until the state
+        changes, so without a ping a watcher that stopped (or a machine that was
+        turned off) would leave the span looking live forever. The server clips
+        such spans a staleness window after the last event, so the ping keeps
+        them alive only while the watcher is actually running.
+        """
+        if self._last_beat is None:
+            self._last_beat = now
+            return
 
-            if current is not None:
-                self.event(
-                    kind="focus",
-                    timestamp=now,
-                    title=current["title"],
-                    task=self.task or current["process"],
-                    detail=current["image"] or f"pid {current['pid']}",
-                )
+        if now - self._last_beat < self.heartbeat:
+            return
+
+        self._last_beat = now
+        self.event(kind="heartbeat", timestamp=now)
 
     def sample_idle(self, now: datetime) -> None:
         if self._was_locked:
@@ -538,6 +571,7 @@ class WindowsWatcher:
         self.sample_lock(now)
         self.sample_focus(now)
         self.sample_idle(now)
+        self.sample_heartbeat(now)
         self.flush()
 
     def run(self, once: bool = False, until: datetime | None = None, stop: threading.Event | None = None) -> None:
@@ -571,6 +605,7 @@ def start_database_watcher(
     poll: float = 1.0,
     idle_minutes: float = 2.0,
     skew_seconds: float = DEFAULT_SKEW_SECONDS,
+    heartbeat: float = DEFAULT_HEARTBEAT_SECONDS,
     verbose: bool = False,
 ) -> tuple[threading.Event, threading.Thread]:
     """Start the watcher in-process, writing events straight to the database."""
@@ -582,6 +617,7 @@ def start_database_watcher(
         poll=poll,
         idle_minutes=idle_minutes,
         skew_seconds=skew_seconds,
+        heartbeat=heartbeat,
         verbose=verbose,
     )
     stop = threading.Event()
@@ -630,6 +666,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_SKEW_SECONDS,
         help="wall-clock skew above this many seconds is reported as the machine sleeping",
     )
+    parser.add_argument(
+        "--heartbeat-seconds",
+        type=float,
+        default=DEFAULT_HEARTBEAT_SECONDS,
+        help="emit a liveness heartbeat this often so the server knows the watcher is still running",
+    )
     parser.add_argument("--run", type=float, default=None, help="exit after N seconds (testing)")
     parser.add_argument("--once", action="store_true", help="sample once and exit (testing)")
     parser.add_argument("--verbose", action="store_true")
@@ -658,6 +700,7 @@ def main(argv: list[str] | None = None) -> int:
         poll=args.poll,
         idle_minutes=args.idle_minutes,
         skew_seconds=args.skew_seconds,
+        heartbeat=args.heartbeat_seconds,
         verbose=args.verbose,
     )
     print(f"[watcher] pushing '{args.source}' events to {base_url.rstrip('/')}", flush=True)

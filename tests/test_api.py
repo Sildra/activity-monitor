@@ -765,19 +765,45 @@ def test_user_timeline_reports_focus_lanes_and_states(tmp_path: Path) -> None:
         assert body["locked"] == []
 
 
-def test_user_timeline_open_span_runs_to_query_end(tmp_path: Path) -> None:
+def test_user_timeline_open_span_clipped_when_watcher_stops(tmp_path: Path) -> None:
     with make_client(tmp_path, WINDOWS_SOURCE) as client:
         t0 = datetime(2026, 10, 1, 9, 0, 0, tzinfo=UTC)
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 
         client.post("/api/ingest/windows", json={"id": "1", "kind": "focus", "task": "code", "timestamp": fmt(t0)})
 
-        end = t0 + timedelta(minutes=20)
-        body = client.get("/api/timelines/user", params={"start": fmt(t0), "end": fmt(end)}).json()
+        body = client.get(
+            "/api/timelines/user", params={"start": fmt(t0), "end": fmt(t0 + timedelta(minutes=20))}
+        ).json()
 
         span = body["lanes"][0]["spans"][0]
         assert datetime.fromisoformat(span["start"]) == t0
-        assert datetime.fromisoformat(span["end"]) == end
+        # The watcher stopped reporting, so the open span ends one staleness
+        # window after the last event instead of stretching to the query end.
+        assert datetime.fromisoformat(span["end"]) == t0 + timedelta(seconds=300)
+
+
+def test_user_timeline_open_span_stays_live_with_recent_events(tmp_path: Path) -> None:
+    with make_client(tmp_path, WINDOWS_SOURCE) as client:
+        t0 = datetime(2026, 10, 1, 9, 0, 0, tzinfo=UTC)
+        fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
+
+        def send(payload: dict) -> None:
+            assert client.post("/api/ingest/windows", json=payload).status_code == 200
+
+        # The watcher keeps pinging, so the open span is still trusted.
+        send({"id": "1", "kind": "focus", "task": "code", "timestamp": fmt(t0)})
+        send({"id": "2", "kind": "heartbeat", "timestamp": fmt(t0 + timedelta(minutes=19))})
+
+        end = t0 + timedelta(minutes=20)
+        body = client.get("/api/timelines/user", params={"start": fmt(t0), "end": fmt(end)}).json()
+
+        spans = body["lanes"][0]["spans"]
+        assert len(spans) == 1
+        assert datetime.fromisoformat(spans[0]["start"]) == t0
+        # The watcher was seen just before the query end, so the open span runs
+        # all the way to it.
+        assert datetime.fromisoformat(spans[0]["end"]) == end
 
 
 def test_tasks_merges_windows_focus_spans(tmp_path: Path) -> None:

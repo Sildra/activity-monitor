@@ -83,10 +83,14 @@ React/TS/Vite frontend, single server serving the built frontend.
   handling at wake (session woke unlocked) or at the real unlock (machine locked to sleep) — so
   sleeping time is not counted as attention. Standalone (`python -m activity_monitor.windows_watcher`)
   it POSTs to `/api/ingest/windows`; embedded (`--watch-windows` / `general.watch_windows`) the backend
-  starts it in-process and it writes straight to the DB via `store_events`. The standalone
+  starts it in-process and it writes straight to the DB via `store_events`. While it runs it also
+  emits a `heartbeat` every `heartbeat_seconds` (default 60) so the server can tell the watcher is
+  alive; an open `focus`/`idle`/`lock` span is only trusted while events keep arriving (see User
+  timeline). The standalone
   watcher also takes flags mirroring every client variable (`--base-url`, `--source`, `--actor`,
   `--host`, `--task`, `--username`, `--password`, `--ca-cert`, `--client-cert`, `--client-key`,
-  `--insecure`) plus `--poll`/`--idle-minutes`/`--skew-seconds`; a flag wins over its env var.
+  `--insecure`) plus `--poll`/`--idle-minutes`/`--skew-seconds`/`--heartbeat-seconds`; a flag wins
+  over its env var.
   Restart it after editing.
 - `tests/` — pytest (`TestClient`, temp config/db)
 
@@ -156,9 +160,11 @@ React/TS/Vite frontend, single server serving the built frontend.
   the dead time is not counted as presence. Idempotent; returns `{removed, trimmed, split}`.
 - **User timeline**: `GET /api/timelines/user` reconstructs desktop activity from the `windows`
   source. `_focus_spans` turns `focus` events into spans (a close carries `duration_ms` and ends at
-  `timestamp`; a trailing open runs to the query end), grouping them into one lane per process
+  `timestamp`; a trailing open runs to the last `windows` event plus `stale_after_seconds` — the
+  watcher's `heartbeat` keeps it live, so a stopped watcher does not leave a multi-day "active"
+  bar), grouping them into one lane per process
   (`task`). `_pair_intervals` pairs `idle.start`/`idle.end` and `lock`/`unlock` into intervals;
-  both are clamped to the query range.
+  both are clamped to the query range and their open pair is clipped the same way.
 - **Code timeline**: `GET /api/timelines/code` returns the `git` source's `commit`/`push` events in
   range; the frontend draws them as one passive `Code` row that is always `closed` (no active/idle
   segments), with event dots.

@@ -619,7 +619,8 @@ async def presence_timeline(
 
 
 _USER_SOURCE = "windows"
-_USER_KINDS = ("focus", "idle.start", "idle.end", "lock", "unlock")
+_HEARTBEAT_KIND = "heartbeat"
+_USER_KINDS = ("focus", "idle.start", "idle.end", "lock", "unlock", _HEARTBEAT_KIND)
 
 
 def _clamp_span(
@@ -634,9 +635,14 @@ def _clamp_span(
     return start, end
 
 
-def _focus_spans(
-    events: list[ActivityEvent], query_end: datetime, now: datetime
-) -> list[tuple[datetime, datetime, ActivityEvent]]:
+def _focus_spans(events: list[ActivityEvent], open_end: datetime) -> list[tuple[datetime, datetime, ActivityEvent]]:
+    """Turn ``focus`` events into spans.
+
+    A close carries ``duration_ms`` and ends at its ``timestamp``. A trailing
+    open span (the last ``focus`` has no ``duration_ms``) is only extended to
+    ``open_end`` — the last observed event plus the staleness window — so a
+    watcher that stopped reporting does not leave a multi-day "active" bar.
+    """
     focus = [event for event in events if event.kind == "focus"]
     spans: list[tuple[datetime, datetime, ActivityEvent]] = []
 
@@ -649,16 +655,15 @@ def _focus_spans(
 
     if focus and focus[-1].duration_ms is None:
         start = as_utc(focus[-1].timestamp)
-        end = min(query_end, now)
 
-        if end > start:
-            spans.append((start, end, focus[-1]))
+        if open_end > start:
+            spans.append((start, open_end, focus[-1]))
 
     return spans
 
 
 def _pair_intervals(
-    events: list[ActivityEvent], start_kind: str, end_kind: str, query_end: datetime, now: datetime
+    events: list[ActivityEvent], start_kind: str, end_kind: str, open_end: datetime
 ) -> list[tuple[datetime, datetime]]:
     intervals: list[tuple[datetime, datetime]] = []
     open_start: datetime | None = None
@@ -678,11 +683,8 @@ def _pair_intervals(
 
             open_start = None
 
-    if open_start is not None:
-        end = min(query_end, now)
-
-        if end > open_start:
-            intervals.append((open_start, end))
+    if open_start is not None and open_end > open_start:
+        intervals.append((open_start, open_end))
 
     return intervals
 
@@ -693,11 +695,11 @@ def _user_intervals(
     end_kind: str,
     query_start: datetime,
     query_end: datetime,
-    now: datetime,
+    open_end: datetime,
 ) -> list[UserInterval]:
     result: list[UserInterval] = []
 
-    for interval_start, interval_end in _pair_intervals(events, start_kind, end_kind, query_end, now):
+    for interval_start, interval_end in _pair_intervals(events, start_kind, end_kind, open_end):
         clamped = _clamp_span(interval_start, interval_end, query_start, query_end)
 
         if clamped is not None:
@@ -734,10 +736,17 @@ async def user_timeline(
         .all()
     )
 
+    stale = _stale_after(request)
+    last_seen = as_utc(events[-1].timestamp) if events else now
+    # A span that is still open (no closing event) is only trusted while the
+    # watcher keeps reporting; clip it near the last event we actually saw so a
+    # stopped watcher does not leave a multi-day "active"/"idle"/"locked" bar.
+    open_end = min(query_end, now, last_seen + stale)
+
     by_process: dict[str, list[UserSpan]] = {}
     totals: dict[str, int] = {}
 
-    for span_start, span_end, event in _focus_spans(events, query_end, now):
+    for span_start, span_end, event in _focus_spans(events, open_end):
         clamped = _clamp_span(span_start, span_end, query_start, query_end)
 
         if clamped is None:
@@ -757,8 +766,8 @@ async def user_timeline(
         start=query_start,
         end=query_end,
         lanes=lanes,
-        idle=_user_intervals(events, "idle.start", "idle.end", query_start, query_end, now),
-        locked=_user_intervals(events, "lock", "unlock", query_start, query_end, now),
+        idle=_user_intervals(events, "idle.start", "idle.end", query_start, query_end, open_end),
+        locked=_user_intervals(events, "lock", "unlock", query_start, query_end, open_end),
     )
 
 
@@ -899,6 +908,10 @@ async def list_tasks(
     stmt = select(ActivityEvent).order_by(ActivityEvent.timestamp.desc())
     stmt = _apply_filters(stmt, q, source, actor, kind, task)
 
+    if kind is None:
+        # Liveness pings are not user-meaningful; only show them when asked for.
+        stmt = stmt.where(ActivityEvent.kind != _HEARTBEAT_KIND)
+
     if start is not None:
         stmt = stmt.where(ActivityEvent.timestamp >= start)
 
@@ -957,7 +970,11 @@ async def list_kinds(session: SessionDep) -> list[str]:
 
 @router.get("/stats", response_model=StatsOut)
 async def stats(session: SessionDep) -> StatsOut:
-    total = (await session.execute(select(func.count()).select_from(ActivityEvent))).scalar_one()
+    total = (
+        await session.execute(
+            select(func.count()).select_from(ActivityEvent).where(ActivityEvent.kind != _HEARTBEAT_KIND)
+        )
+    ).scalar_one()
     sources = (await session.execute(select(func.count(distinct(ActivityEvent.source))))).scalar_one()
     actors = (await session.execute(select(func.count(distinct(ActivityEvent.actor))))).scalar_one()
     tasks = (await session.execute(select(func.count(distinct(ActivityEvent.task))))).scalar_one()
