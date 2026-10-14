@@ -174,3 +174,9 @@ class CodeTimeline(BaseModel):
     start: datetime
     end: datetime
     events: list[EventOut] = []
+
+
+class ConsolidateOut(BaseModel):
+    removed: int = 0
+    trimmed: int = 0
+    split: int = 0

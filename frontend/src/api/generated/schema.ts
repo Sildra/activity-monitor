@@ -106,6 +106,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/programs/consolidate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Consolidate Programs
+         * @description Tidy the stored program history.
+         *
+         *     Finished programs are rewritten from their own events: a program with no events is
+         *     deleted, each one is trimmed to its first and last non-idle boundary, and an idle
+         *     gap longer than ``idle_seconds`` splits it into separate blocks so the dead time is
+         *     not counted as presence. Running programs (``ended_at`` unset) are left alone.
+         */
+        post: operations["consolidate_programs_api_programs_consolidate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timelines/presence": {
         parameters: {
             query?: never;
@@ -302,6 +327,24 @@ export interface components {
              * @default []
              */
             events: components["schemas"]["EventOut"][];
+        };
+        /** ConsolidateOut */
+        ConsolidateOut: {
+            /**
+             * Removed
+             * @default 0
+             */
+            removed: number;
+            /**
+             * Trimmed
+             * @default 0
+             */
+            trimmed: number;
+            /**
+             * Split
+             * @default 0
+             */
+            split: number;
         };
         /** EventOut */
         EventOut: {
@@ -739,6 +782,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProgramOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consolidate_programs_api_programs_consolidate_post: {
+        parameters: {
+            query?: {
+                idle_seconds?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsolidateOut"];
                 };
             };
             /** @description Validation Error */

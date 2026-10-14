@@ -369,6 +369,72 @@ def test_program_end_closes_at_last_activity(tmp_path: Path) -> None:
         assert as_utc(datetime.fromisoformat(ended)) == as_utc(datetime.fromisoformat(stored_seen))
 
 
+def test_consolidate_removes_empty_trims_and_splits_idle(tmp_path: Path) -> None:
+    with make_client(tmp_path, PUSH_SOURCE) as client:
+        db_path = tmp_path / "activity.db"
+        t0 = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
+        fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
+
+        def program(program_id: str, start: datetime, end: datetime) -> None:
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "insert into program (program_id, source, host, actor, started_at, last_seen_at, ended_at)"
+                " values (?, ?, ?, ?, ?, ?, ?)",
+                (program_id, "opencode", "h1", "opencode", fmt(start), fmt(end), fmt(end)),
+            )
+            conn.commit()
+            conn.close()
+
+        def event(kind: str, at: datetime) -> None:
+            client.post(
+                "/api/ingest/opencode",
+                json={
+                    "id": f"p1-{kind}-{at.isoformat()}",
+                    "kind": kind,
+                    "actor": "user",
+                    "timestamp": fmt(at),
+                    "program": {"id": "p1", "source": "opencode", "host": "h1"},
+                },
+            )
+
+        program("empty", t0, t0 + timedelta(hours=1))
+        program("p1", t0, t0 + timedelta(hours=3))
+
+        event("prompt.begin", t0 + timedelta(minutes=10))
+        event("prompt.end", t0 + timedelta(minutes=20))
+        event("prompt.begin", t0 + timedelta(hours=2, minutes=10))
+        event("prompt.end", t0 + timedelta(hours=2, minutes=20))
+
+        result = client.post("/api/programs/consolidate", params={"idle_seconds": 3600}).json()
+        assert result == {"removed": 1, "trimmed": 1, "split": 1}
+
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute("select program_id, started_at, ended_at from program order by started_at").fetchall()
+        conn.close()
+
+        def span(row: tuple[str, str, str]) -> tuple[str, datetime, datetime]:
+            return row[0], as_utc(datetime.fromisoformat(row[1])), as_utc(datetime.fromisoformat(row[2]))
+
+        assert [span(row) for row in rows] == [
+            ("p1", t0 + timedelta(minutes=10), t0 + timedelta(minutes=20)),
+            ("p1", t0 + timedelta(hours=2, minutes=10), t0 + timedelta(hours=2, minutes=20)),
+        ]
+
+        # Both split blocks keep their own events on one lane, with the dead gap closed.
+        lane = client.get(
+            "/api/timelines/presence", params={"start": fmt(t0), "end": fmt(t0 + timedelta(hours=3))}
+        ).json()["lanes"][0]
+        assert [segment["state"] for segment in lane["segments"]] == ["closed", "active", "closed", "active", "closed"]
+        assert len(lane["events"]) == 4
+
+        # Consolidating again is a no-op (idempotent).
+        assert client.post("/api/programs/consolidate", params={"idle_seconds": 3600}).json() == {
+            "removed": 0,
+            "trimmed": 0,
+            "split": 0,
+        }
+
+
 def test_stale_program_detected_and_restart_merges_same_lane(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE, stale=1) as client:
         client.post("/api/programs/start", json={"program_id": "p1", "source": "opencode", "host": "h1"})

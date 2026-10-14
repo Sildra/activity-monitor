@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Box, Button, CircularProgress, Paper, TextField, Typography } from "@mui/material";
+import CompressIcon from "@mui/icons-material/Compress";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { api } from "../api/client";
 import UnifiedTimeline, {
@@ -27,6 +28,9 @@ export default function TimelinePage() {
     const [code, setCode] = useState<CodeTimelineResponse | null>(null);
     const [range, setRange] = useState<{ start: string; end: string }>({ start: "", end: "" });
     const [loading, setLoading] = useState(false);
+    const [idleHours, setIdleHours] = useState("1");
+    const [consolidating, setConsolidating] = useState(false);
+    const [consolidateResult, setConsolidateResult] = useState("");
     const [selected, setSelected] = useState<UnifiedTimelineEvent | null>(null);
 
     const load = useCallback(async (): Promise<{
@@ -85,6 +89,26 @@ export default function TimelinePage() {
             })
             .finally(() => setLoading(false));
     }, [load]);
+
+    const consolidate = useCallback(() => {
+        const idle_seconds = Math.max(1, Math.round((Number(idleHours) || 1) * 3600));
+
+        setConsolidating(true);
+        setConsolidateResult("");
+
+        api.POST("/api/programs/consolidate", { params: { query: { idle_seconds } } })
+            .then((response) => {
+                if (response.data) {
+                    setConsolidateResult(
+                        `Removed ${response.data.removed} · trimmed ${response.data.trimmed} · split ${response.data.split}`,
+                    );
+                }
+            })
+            .finally(() => {
+                setConsolidating(false);
+                refresh();
+            });
+    }, [idleHours, refresh]);
 
     const laneCounts = new Map<string, number>();
 
@@ -166,6 +190,30 @@ export default function TimelinePage() {
                 <Button variant="outlined" startIcon={<RefreshIcon />} onClick={refresh} disabled={loading}>
                     Refresh
                 </Button>
+                <TextField
+                    label="Idle (h)"
+                    type="number"
+                    size="small"
+                    value={idleHours}
+                    onChange={(e) => setIdleHours(e.target.value)}
+                    slotProps={{ htmlInput: { min: 0.25, step: 0.25 }, inputLabel: { shrink: true } }}
+                    sx={{ width: 110 }}
+                />
+                <Button
+                    variant="outlined"
+                    color="secondary"
+                    startIcon={<CompressIcon />}
+                    onClick={consolidate}
+                    disabled={consolidating}
+                >
+                    Consolidate
+                </Button>
+                {consolidating && <CircularProgress size={20} />}
+                {consolidateResult && (
+                    <Typography variant="caption" color="text.secondary">
+                        {consolidateResult}
+                    </Typography>
+                )}
                 {loading && <CircularProgress size={20} />}
             </Box>
 

@@ -16,6 +16,7 @@ from activity_monitor.models import (
     ActorLane,
     AgenticTimeline,
     CodeTimeline,
+    ConsolidateOut,
     EventOut,
     PresenceLane,
     PresenceTimeline,
@@ -268,12 +269,106 @@ async def program_end(payload: ProgramRef, session: SessionDep) -> ProgramOut:
     return ProgramOut(program_id=program.program_id, source=program.source, host=program.host)
 
 
+@router.post("/programs/consolidate", response_model=ConsolidateOut)
+async def consolidate_programs(
+    request: Request, session: SessionDep, idle_seconds: int = Query(3600, gt=0)
+) -> ConsolidateOut:
+    """Tidy the stored program history.
+
+    Finished programs are rewritten from their own events: a program with no events is
+    deleted, each one is trimmed to its first and last non-idle boundary, and an idle
+    gap longer than ``idle_seconds`` splits it into separate blocks so the dead time is
+    not counted as presence. Running programs (``ended_at`` unset) are left alone.
+    """
+    now = datetime.now(UTC)
+    await _expire_stale(session, now, _stale_after(request))
+
+    programs = list(
+        (await session.execute(select(Program).where(Program.ended_at.is_not(None)).order_by(Program.started_at.asc())))
+        .scalars()
+        .all()
+    )
+
+    threshold = timedelta(seconds=idle_seconds)
+    events = await _program_events(session, {program.program_id for program in programs})
+    by_pid: dict[str, list[ActivityEvent]] = {}
+
+    for event in events:
+        program_id = _event_program_id(event)
+
+        if program_id is not None:
+            by_pid.setdefault(program_id, []).append(event)
+
+    removed = trimmed = split = 0
+
+    for program in programs:
+        program_events = by_pid.get(program.program_id, [])
+
+        if not program_events:
+            await session.delete(program)
+            removed += 1
+            continue
+
+        started, ended = _program_bounds(program, now, now)
+        in_range = [event for event in program_events if started <= as_utc(event.timestamp) <= ended]
+
+        if not in_range:
+            continue
+
+        segments = _compose_segments(
+            [(started, ended)], [EventOut.from_event(event) for event in in_range], started, ended
+        )
+        active = [(segment.start, segment.end) for segment in segments if segment.state != "idle"]
+
+        if not active:
+            continue
+
+        groups: list[tuple[datetime, datetime]] = []
+
+        for seg_start, seg_end in active:
+            if groups and seg_start - groups[-1][1] <= threshold:
+                groups[-1] = (groups[-1][0], seg_end)
+            else:
+                groups.append((seg_start, seg_end))
+
+        if groups[0] != (started, ended):
+            trimmed += 1
+
+        program.started_at = groups[0][0]
+        program.ended_at = groups[0][1]
+        program.last_seen_at = groups[0][1]
+
+        for group_start, group_end in groups[1:]:
+            session.add(
+                Program(
+                    program_id=program.program_id,
+                    source=program.source,
+                    host=program.host,
+                    actor=program.actor,
+                    started_at=group_start,
+                    last_seen_at=group_end,
+                    ended_at=group_end,
+                )
+            )
+            split += 1
+
+    await session.commit()
+
+    return ConsolidateOut(removed=removed, trimmed=trimmed, split=split)
+
+
+def _program_bounds(program: Program, query_end: datetime, now: datetime) -> tuple[datetime, datetime]:
+    started = as_utc(program.started_at)
+    ended = as_utc(program.ended_at) if program.ended_at is not None else min(query_end, now)
+
+    return started, ended
+
+
 def _active_ranges(programs: list[Program], query_end: datetime, now: datetime) -> list[tuple[datetime, datetime]]:
     ranges: list[tuple[datetime, datetime]] = []
 
     for program in programs:
-        started = as_utc(program.started_at)
-        ended = as_utc(program.ended_at) if program.ended_at is not None else min(query_end, now)
+        started, ended = _program_bounds(program, query_end, now)
 
         if ended > started:
             ranges.append((started, ended))
@@ -357,8 +452,7 @@ def _assign_lanes(programs: list[Program], query_end: datetime, now: datetime) -
     lane_end: list[datetime] = []
 
     for program in programs:
-        started = as_utc(program.started_at)
-        ended = as_utc(program.ended_at) if program.ended_at is not None else min(query_end, now)
+        started, ended = _program_bounds(program, query_end, now)
         idx = next((index for index, last in enumerate(lane_end) if last <= started), len(lane_end))
 
         if idx == len(lane_end):
@@ -372,31 +466,93 @@ def _assign_lanes(programs: list[Program], query_end: datetime, now: datetime) -
     return lanes
 
 
-async def _lane_events(
-    session: AsyncSession, programs: list[Program], query_start: datetime, query_end: datetime
-) -> list[EventOut]:
-    program_ids = {program.program_id for program in programs}
+def _event_program_id(event: ActivityEvent) -> str | None:
+    raw = (event.data or {}).get("raw") or {}
+    program = raw.get("program") or {}
 
+    return program.get("id")
+
+
+async def _program_events(
+    session: AsyncSession, program_ids: set[str], query_start: datetime | None = None, query_end: datetime | None = None
+) -> list[ActivityEvent]:
     if not program_ids:
         return []
 
-    rows = (
-        (
-            await session.execute(
-                select(ActivityEvent)
-                .where(
-                    ActivityEvent.timestamp >= query_start,
-                    ActivityEvent.timestamp <= query_end,
-                    func.json_extract(ActivityEvent.data, "$.raw.program.id").in_(program_ids),
-                )
-                .order_by(ActivityEvent.timestamp.asc())
-            )
-        )
-        .scalars()
-        .all()
+    stmt = (
+        select(ActivityEvent)
+        .where(func.json_extract(ActivityEvent.data, "$.raw.program.id").in_(program_ids))
+        .order_by(ActivityEvent.timestamp.asc(), ActivityEvent.id.asc())
     )
 
-    return [EventOut.from_event(event) for event in rows]
+    if query_start is not None:
+        stmt = stmt.where(ActivityEvent.timestamp >= query_start)
+
+    if query_end is not None:
+        stmt = stmt.where(ActivityEvent.timestamp <= query_end)
+
+    return list((await session.execute(stmt)).scalars().all())
+
+
+def _lane_covers(
+    programs: list[Program], program_id: str, timestamp: datetime, query_end: datetime, now: datetime
+) -> bool:
+    for program in programs:
+        if program.program_id != program_id:
+            continue
+
+        started, ended = _program_bounds(program, query_end, now)
+
+        if started <= timestamp <= ended:
+            return True
+
+    return False
+
+
+def _distribute_events(
+    lanes: list[list[Program]], events: list[ActivityEvent], query_end: datetime, now: datetime
+) -> list[list[ActivityEvent]]:
+    """Attach each program event to exactly one lane.
+
+    Events are matched to programs by ``data.raw.program.id``. Consolidation can split
+    one program across several non-overlapping blocks that share the id, which may land
+    in different lanes when another program fills the gap; in that case each event goes
+    to the lane whose block covers its timestamp so a dot is never drawn twice.
+    """
+    owners: dict[str, list[int]] = {}
+
+    for index, programs in enumerate(lanes):
+        for program in programs:
+            owners.setdefault(program.program_id, []).append(index)
+
+    buckets: list[list[ActivityEvent]] = [[] for _ in lanes]
+
+    for event in events:
+        program_id = _event_program_id(event)
+
+        if program_id is None:
+            continue
+
+        candidates = owners.get(program_id)
+
+        if not candidates:
+            continue
+
+        if len(candidates) == 1:
+            buckets[candidates[0]].append(event)
+            continue
+
+        target = next(
+            (
+                index
+                for index in candidates
+                if _lane_covers(lanes[index], program_id, as_utc(event.timestamp), query_end, now)
+            ),
+            candidates[0],
+        )
+        buckets[target].append(event)
+
+    return buckets
 
 
 @router.get("/timelines/presence", response_model=PresenceTimeline)
@@ -429,24 +585,33 @@ async def presence_timeline(
     for program in programs:
         by_key.setdefault((program.source, program.host), []).append(program)
 
-    lanes: list[PresenceLane] = []
+    lane_specs: list[tuple[str, str, int, list[Program]]] = []
 
     for (source, host), key_programs in by_key.items():
         for parallel_id, lane_programs in enumerate(_assign_lanes(key_programs, query_end, now)):
-            ranges = _active_ranges(lane_programs, query_end, now)
-            events = await _lane_events(session, lane_programs, query_start, query_end)
-            segments = _compose_segments(ranges, events, query_start, query_end)
+            lane_specs.append((source, host, parallel_id, lane_programs))
 
-            lanes.append(
-                PresenceLane(
-                    key=f"{source}-{host}-{parallel_id}",
-                    source=source,
-                    host=host,
-                    parallel_id=parallel_id,
-                    segments=segments,
-                    events=events,
-                )
+    program_ids = {program.program_id for _, _, _, lane_programs in lane_specs for program in lane_programs}
+    events = await _program_events(session, program_ids, query_start, query_end)
+    buckets = _distribute_events([lane_programs for _, _, _, lane_programs in lane_specs], events, query_end, now)
+
+    lanes: list[PresenceLane] = []
+
+    for index, (source, host, parallel_id, lane_programs) in enumerate(lane_specs):
+        ranges = _active_ranges(lane_programs, query_end, now)
+        lane_events = [EventOut.from_event(event) for event in buckets[index]]
+        segments = _compose_segments(ranges, lane_events, query_start, query_end)
+
+        lanes.append(
+            PresenceLane(
+                key=f"{source}-{host}-{parallel_id}",
+                source=source,
+                host=host,
+                parallel_id=parallel_id,
+                segments=segments,
+                events=lane_events,
             )
+        )
 
     lanes.sort(key=lambda lane: lane.key)
 

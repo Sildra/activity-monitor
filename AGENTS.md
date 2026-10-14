@@ -140,12 +140,20 @@ React/TS/Vite frontend, single server serving the built frontend.
   event kinds, not matched pairs: `prompt.begin` → `active`, `permission.asked` → `waiting`,
   `permission.replied` → `active`, `question.asked` → `waiting`, `question.replied` → `active`,
   `prompt.end` → `idle` (`_EVENT_STATE`); a run is `idle` by
-  default and ends `closed`. Events attach to a lane via `data.raw.program.id` (`_lane_events`).
+  default and ends `closed`. Events attach to a lane via `data.raw.program.id`
+  (`_distribute_events`; because consolidation can split one program across blocks that land in
+  different lanes, each event goes to the lane whose block covers its timestamp so it is never drawn
+  twice).
   The opencode plugins emit `permission.asked`/`permission.replied` only when the user is actually
   prompted (auto-allowed calls are skipped) so the timeline can show where attention was needed.
   The V2 plugin emits `question.asked`/`question.replied` from the `form.created`/`form.replied`/
   `form.cancelled` events of the built-in `question` tool (`metadata.kind === "question"`); V1 has
   no question tool.
+- **Consolidate**: `POST /api/programs/consolidate?idle_seconds=` tidies the stored history of
+  finished programs (running ones are untouched): a program id with no events is deleted, each
+  program is trimmed to its first/last non-idle boundary, and an idle gap longer than
+  `idle_seconds` (default 3600) splits it into separate `Program` rows that share the program id, so
+  the dead time is not counted as presence. Idempotent; returns `{removed, trimmed, split}`.
 - **User timeline**: `GET /api/timelines/user` reconstructs desktop activity from the `windows`
   source. `_focus_spans` turns `focus` events into spans (a close carries `duration_ms` and ends at
   `timestamp`; a trailing open runs to the query end), grouping them into one lane per process
@@ -159,9 +167,10 @@ React/TS/Vite frontend, single server serving the built frontend.
 ## Frontend (Vite + React 19 + TS + MUI)
 
 - **Pages**: `TimelinePage` (date range -> one `UnifiedTimeline` merging the `User` row with
-  `Agent N` lanes), `TaskPage` (the "Events" tab — search + filters + task list -> `Timeline` +
-  event list; tasks are grouping keys, e.g. a Jira id), `SourcesPage` (list + fetch + ingest
-  example). `App.tsx` is a MUI `Tabs` shell; page selected by `?page=`.
+  `Agent N` lanes; a `Consolidate` button + idle-hours field calls
+  `POST /api/programs/consolidate` and reloads), `TaskPage` (the "Events" tab — search + filters +
+  task list -> `Timeline` + event list; tasks are grouping keys, e.g. a Jira id), `SourcesPage`
+  (list + fetch + ingest example). `App.tsx` is a MUI `Tabs` shell; page selected by `?page=`.
 - **Timeline**: `src/components/Timeline.tsx` renders lanes as responsive HTML (percentage
   positions), dots colored by `kind`, optional duration bars, MUI tooltips.
   `src/components/UnifiedTimeline.tsx` renders one timeline: a single `User` row (all desktop
