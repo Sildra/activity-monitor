@@ -17,7 +17,7 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import { api } from "../api/client";
 import Timeline, { type TimelineEvent } from "../components/Timeline";
 import { groupBy, type Lane } from "../lib/timeline";
-import { endOfDay, formatDateTime, formatTime, startOfDay, toDateInput } from "../lib/format";
+import { endOfDay, formatDateTime, formatTime, startOfDay, startOfWeek, toDateTimeInput, toIso } from "../lib/format";
 import type { components } from "../api/generated/schema";
 
 type EventOut = components["schemas"]["EventOut"];
@@ -29,8 +29,8 @@ interface TaskData {
     summaries: TaskSummary[];
 }
 
-const TODAY = toDateInput(new Date());
-const WEEK_AGO = toDateInput(new Date(Date.now() - 6 * 86400_000));
+const DEFAULT_START = toDateTimeInput(startOfDay(new Date(Date.now() - 6 * 86400_000)));
+const DEFAULT_END = toDateTimeInput(endOfDay(new Date()));
 
 function toTimelineEvent(event: EventOut): TimelineEvent {
     return {
@@ -50,8 +50,8 @@ export default function TaskPage() {
     const [actor, setActor] = useState("");
     const [kind, setKind] = useState("");
     const [task, setTask] = useState("");
-    const [startDate, setStartDate] = useState(WEEK_AGO);
-    const [endDate, setEndDate] = useState(TODAY);
+    const [startAt, setStartAt] = useState(DEFAULT_START);
+    const [endAt, setEndAt] = useState(DEFAULT_END);
 
     const [sources, setSources] = useState<SourceInfo[]>([]);
     const [actors, setActors] = useState<string[]>([]);
@@ -90,7 +90,7 @@ export default function TaskPage() {
     }, []);
 
     const load = useCallback(async (): Promise<TaskData | null> => {
-        const range = { start: startOfDay(startDate), end: endOfDay(endDate) };
+        const range = { start: toIso(startAt), end: toIso(endAt) };
         const [tasksResult, summaryResult] = await Promise.all([
             api.GET("/api/tasks", {
                 params: {
@@ -112,7 +112,7 @@ export default function TaskPage() {
         }
 
         return { events: tasksResult.data, summaries: summaryResult.data };
-    }, [q, source, actor, kind, task, startDate, endDate]);
+    }, [q, source, actor, kind, task, startAt, endAt]);
 
     useEffect(() => {
         let cancelled = false;
@@ -140,6 +140,11 @@ export default function TaskPage() {
             })
             .finally(() => setLoading(false));
     }, [load]);
+
+    const applyRange = useCallback((start: Date, end: Date) => {
+        setStartAt(toDateTimeInput(start));
+        setEndAt(toDateTimeInput(end));
+    }, []);
 
     const lanes: Lane<TimelineEvent>[] = useMemo(() => {
         const grouped = groupBy(events, (event) => event.actor);
@@ -201,20 +206,34 @@ export default function TaskPage() {
                 <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
                     <TextField
                         label="From"
-                        type="date"
+                        type="datetime-local"
                         size="small"
-                        value={startDate}
-                        onChange={(e) => setStartDate(e.target.value)}
+                        value={startAt}
+                        onChange={(e) => setStartAt(e.target.value)}
                         slotProps={{ inputLabel: { shrink: true } }}
                     />
                     <TextField
                         label="To"
-                        type="date"
+                        type="datetime-local"
                         size="small"
-                        value={endDate}
-                        onChange={(e) => setEndDate(e.target.value)}
+                        value={endAt}
+                        onChange={(e) => setEndAt(e.target.value)}
                         slotProps={{ inputLabel: { shrink: true } }}
                     />
+                    <Button
+                        size="small"
+                        variant="text"
+                        onClick={() => applyRange(startOfDay(new Date()), endOfDay(new Date()))}
+                    >
+                        Today
+                    </Button>
+                    <Button
+                        size="small"
+                        variant="text"
+                        onClick={() => applyRange(startOfWeek(new Date()), endOfDay(new Date()))}
+                    >
+                        This week
+                    </Button>
                     <TextField
                         select
                         label="Source"

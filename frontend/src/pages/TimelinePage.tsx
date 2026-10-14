@@ -9,7 +9,7 @@ import UnifiedTimeline, {
     type UnifiedLane,
     type UserActivity,
 } from "../components/UnifiedTimeline";
-import { endOfDay, startOfDay, toDateInput } from "../lib/format";
+import { endOfDay, startOfDay, startOfWeek, toDateTimeInput, toIso } from "../lib/format";
 import type { components } from "../api/generated/schema";
 
 type PresenceLane = components["schemas"]["PresenceLane"];
@@ -17,12 +17,12 @@ type PresenceTimelineResponse = components["schemas"]["PresenceTimeline"];
 type UserTimelineResponse = components["schemas"]["UserTimeline"];
 type CodeTimelineResponse = components["schemas"]["CodeTimeline"];
 
-const TODAY = toDateInput(new Date());
-const WEEK_AGO = toDateInput(new Date(Date.now() - 6 * 86400_000));
+const DEFAULT_START = toDateTimeInput(startOfDay(new Date(Date.now() - 6 * 86400_000)));
+const DEFAULT_END = toDateTimeInput(endOfDay(new Date()));
 
 export default function TimelinePage() {
-    const [startDate, setStartDate] = useState(WEEK_AGO);
-    const [endDate, setEndDate] = useState(TODAY);
+    const [startAt, setStartAt] = useState(DEFAULT_START);
+    const [endAt, setEndAt] = useState(DEFAULT_END);
     const [lanes, setLanes] = useState<PresenceLane[]>([]);
     const [user, setUser] = useState<UserTimelineResponse | null>(null);
     const [code, setCode] = useState<CodeTimelineResponse | null>(null);
@@ -38,7 +38,7 @@ export default function TimelinePage() {
         user: UserTimelineResponse | null;
         code: CodeTimelineResponse | null;
     }> => {
-        const query = { start: startOfDay(startDate), end: endOfDay(endDate) };
+        const query = { start: toIso(startAt), end: toIso(endAt) };
 
         const [presence, userTimeline, codeTimeline] = await Promise.all([
             api.GET("/api/timelines/presence", { params: { query } }),
@@ -51,7 +51,7 @@ export default function TimelinePage() {
             user: userTimeline.data ?? null,
             code: codeTimeline.data ?? null,
         };
-    }, [startDate, endDate]);
+    }, [startAt, endAt]);
 
     useEffect(() => {
         let cancelled = false;
@@ -109,6 +109,11 @@ export default function TimelinePage() {
                 refresh();
             });
     }, [idleHours, refresh]);
+
+    const applyRange = useCallback((start: Date, end: Date) => {
+        setStartAt(toDateTimeInput(start));
+        setEndAt(toDateTimeInput(end));
+    }, []);
 
     const laneCounts = new Map<string, number>();
 
@@ -173,20 +178,34 @@ export default function TimelinePage() {
                 <Typography variant="h6">Timeline</Typography>
                 <TextField
                     label="From"
-                    type="date"
+                    type="datetime-local"
                     size="small"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
+                    value={startAt}
+                    onChange={(e) => setStartAt(e.target.value)}
                     slotProps={{ inputLabel: { shrink: true } }}
                 />
                 <TextField
                     label="To"
-                    type="date"
+                    type="datetime-local"
                     size="small"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
+                    value={endAt}
+                    onChange={(e) => setEndAt(e.target.value)}
                     slotProps={{ inputLabel: { shrink: true } }}
                 />
+                <Button
+                    size="small"
+                    variant="text"
+                    onClick={() => applyRange(startOfDay(new Date()), endOfDay(new Date()))}
+                >
+                    Today
+                </Button>
+                <Button
+                    size="small"
+                    variant="text"
+                    onClick={() => applyRange(startOfWeek(new Date()), endOfDay(new Date()))}
+                >
+                    This week
+                </Button>
                 <Button variant="outlined" startIcon={<RefreshIcon />} onClick={refresh} disabled={loading}>
                     Refresh
                 </Button>

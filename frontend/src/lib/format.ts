@@ -58,16 +58,32 @@ export function formatDuration(ms: number | null | undefined): string {
     return `${(minutes / 60).toFixed(1)} h`;
 }
 
-export function toDateInput(date: Date): string {
+export function startOfDay(date: Date): Date {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+}
+
+export function endOfDay(date: Date): Date {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+}
+
+export function startOfWeek(date: Date): Date {
+    const monday = (date.getDay() + 6) % 7;
+
+    return startOfDay(new Date(date.getFullYear(), date.getMonth(), date.getDate() - monday));
+}
+
+export function toDateTimeInput(date: Date): string {
     const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
 
-    return local.toISOString().slice(0, 10);
+    return local.toISOString().slice(0, 16);
 }
 
-export function startOfDay(value: string): string {
-    return new Date(`${value}T00:00:00`).toISOString();
-}
+export function toIso(value: string): string | undefined {
+    if (!value) {
+        return undefined;
+    }
 
-export function endOfDay(value: string): string {
-    return new Date(`${value}T23:59:59.999`).toISOString();
+    const date = new Date(value);
+
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
