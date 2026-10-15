@@ -48,6 +48,7 @@ Flags:
 - `--database PATH` — override database location
 - `--port INT` — override API port (or set `ACTIVITY_MONITOR_PORT`)
 - `--watch-windows` — embed the Windows desktop watcher
+- `--tray` — tray icon (green once the server has started) with an `Exit` entry that stops it; Windows only
 - `--ssl` — enable HTTPS
 - `--ssl-certfile PATH` — server certificate file
 - `--ssl-keyfile PATH` — server private key file

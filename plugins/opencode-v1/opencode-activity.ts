@@ -162,26 +162,48 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     let connection: "pending" | "ok" | "error" = "pending";
     let publishedConnection = "";
 
-    // Mirror the connection state into the OpenCode TUI (see tui.tsx). V1 has no
-    // RPC bridge between a plugin's server and TUI halves, so the state is handed
-    // over as a namespaced command on the one server -> TUI channel the SDK
-    // exposes. Best effort: a headless server, or an older client without
-    // `tui.publish`, simply no-ops and the indicator stays idle.
-    const publishConnection = (): void => {
+    // Mirror the connection state and the per-session task into the OpenCode TUI
+    // (see tui.tsx). V1 has no RPC bridge between a plugin's server and TUI
+    // halves, so they are handed over as namespaced commands on the one server ->
+    // TUI channel the SDK exposes. Best effort: a headless server, or an older
+    // client without `tui.publish`, simply no-ops and the indicator stays idle.
+    //
+    // The commands are ignored by the TUI core unless the event's directory
+    // matches, and unknown commands dispatch nothing, so re-sending them is safe.
+    const publishCommand = (command: string): void => {
+        try {
+            void client.tui
+                .publish({ body: { type: "tui.command.execute", properties: { command } } })
+                .catch(() => undefined);
+        } catch {
+            // Older clients lack a TUI publisher; ignore.
+        }
+    };
+
+    // `/task <id>` pins the id on that session's sidebar label. The task is user
+    // text and may contain ":": the session id (which never does) comes first.
+    const publishTask = (sessionID: string, task: string): void => {
+        publishCommand(`activity-monitor:task:${sessionID}:${task}`);
+    };
+
+    // The TUI half only subscribes once it loads, which is after this plugin has
+    // already published its initial state, and a state that never changes is never
+    // re-sent, so a late subscriber would sit on "Connecting" forever (and miss
+    // every task). `force` re-publishes the current state regardless (used on
+    // every heartbeat) and every pinned task rides along, so the indicator
+    // converges.
+    const publishConnection = (force = false): void => {
         const state = shadowAll ? "shadow" : connection;
 
-        if (state === publishedConnection) {
+        if (!force && state === publishedConnection) {
             return;
         }
 
         publishedConnection = state;
+        publishCommand(`activity-monitor:${state}`);
 
-        try {
-            void client.tui
-                .publish({ body: { type: "tui.command.execute", properties: { command: `activity-monitor:${state}` } } })
-                .catch(() => undefined);
-        } catch {
-            // Older clients lack a TUI publisher; ignore.
+        for (const [sessionID, task] of sessionTasks) {
+            publishTask(sessionID, task);
         }
     };
 
@@ -203,7 +225,16 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     const sessionTask = (sessionID: string | undefined): string | undefined =>
         sessionID !== undefined ? sessionTasks.get(sessionID) : undefined;
 
-    const post = async (path: string, body: unknown, attempts = 1, backoffMs = 750): Promise<boolean> => {
+    // `on_status` hands the HTTP status of a rejected reply back to the caller so
+    // it can tell a meaningful answer (404 = the backend has no such program) from
+    // a plain failure to report.
+    const post = async (
+        path: string,
+        body: unknown,
+        attempts = 1,
+        backoffMs = 750,
+        on_status?: (status: number) => void,
+    ): Promise<boolean> => {
         if (shadowAll) {
             return true;
         }
@@ -223,6 +254,7 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
                 }
 
                 failure = `${path} rejected (${response.status})`;
+                on_status?.(response.status);
             } catch (error) {
                 failure = `${path} failed: ${(error as Error).message}`;
             }
@@ -240,25 +272,41 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     const ingest = (event: Record<string, unknown>): Promise<boolean> =>
         post(`/api/ingest/${encodeURIComponent(source)}`, { ...event, host });
 
-    const beat = (): Promise<boolean> => post("/api/programs/beat", { program_id: programId });
+    const register = (): Promise<boolean> =>
+        post("/api/programs/start", { program_id: programId, source, host, actor: opts.actor }, 8, 1000);
+
+    const beat = async (): Promise<boolean> => {
+        let missing = false;
+
+        const sent = await post("/api/programs/beat", { program_id: programId }, 1, 750, (status) => {
+            missing = status === 404;
+        });
+
+        if (sent || !missing) {
+            return sent;
+        }
+
+        // The backend answered, but has no active program for this id: the first
+        // `start` ran while it was down, or the row was expired. Re-run it so
+        // presence recovers instead of 404ing on every beat. A beat that never
+        // reached the backend (network error) is not 404 and is left alone.
+        await register();
+
+        return post("/api/programs/beat", { program_id: programId }, 1);
+    };
 
     let interval: ReturnType<typeof setInterval> | undefined;
 
     const programEvents = (): { id: string; source: string; host: string } => ({ id: programId, source, host });
 
-    await post(
-        "/api/programs/start",
-        { program_id: programId, source, host, actor: opts.actor },
-        8,
-        1000,
-    );
+    await register();
 
     // Also fires when shadowed (post() returns early then) so the indicator
     // settles before the first beat.
     publishConnection();
 
     interval = setInterval(() => {
-        beat();
+        void beat().then(() => publishConnection(true));
     }, opts.heartbeatMs ?? 60_000);
 
     return {
@@ -292,6 +340,8 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
             } else {
                 sessionTasks.delete(input.sessionID);
             }
+
+            publishTask(input.sessionID, task);
 
             await ingest({
                 id: stableId("task", input.sessionID, task),

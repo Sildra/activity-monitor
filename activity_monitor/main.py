@@ -27,6 +27,11 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Run the desktop watcher in-process, writing events straight to the database",
     )
+    parser.add_argument(
+        "--tray",
+        action="store_true",
+        help="Show a tray icon while the server runs (its Exit entry stops the server; Windows only)",
+    )
     parser.add_argument("--ssl", action="store_true", help="Enable HTTPS")
     parser.add_argument("--ssl-certfile", type=Path, default=None, help="Path to SSL certificate file")
     parser.add_argument("--ssl-keyfile", type=Path, default=None, help="Path to SSL private key file")
@@ -94,6 +99,14 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                 actor=settings.get("actor"),
                 verbose=bool(settings.get("verbose", False)),
             )
+
+        # The tray icon only exists with --tray (main() puts it on the app); it
+        # turns green only once startup succeeded, so a failing init (or watcher
+        # start) above leaves it gray until the process goes away.
+        tray = getattr(app.state, "tray", None)
+
+        if tray is not None:
+            tray.set_state(True)
 
         try:
             yield
@@ -177,10 +190,30 @@ def main() -> None:
     get_logger().info("Activity Monitor: %s://localhost:%s", scheme, config.port)
     get_logger().info("Swagger:          %s://localhost:%s/docs", scheme, config.port)
 
+    tray = None
+
+    if args.tray:
+        if os.name != "nt":
+            raise SystemExit("--tray is only supported on Windows")
+
+        from activity_monitor.tray import TrayIcon
+
+        def stop_server() -> None:
+            # uvicorn's graceful shutdown from another thread; it also stops an
+            # embedded watcher through the lifespan's cleanup.
+            server.should_exit = True
+
+        tray = TrayIcon(f"Activity Monitor — localhost:{config.port}", on_exit=stop_server)
+        tray.start()
+        app.state.tray = tray
+
     try:
         server.run()
     except KeyboardInterrupt:
         pass
+    finally:
+        if tray is not None:
+            tray.stop()
 
 
 if __name__ == "__main__":

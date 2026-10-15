@@ -34,7 +34,8 @@ restarts) dedupe on the server.
 Two ways to run it:
 
 - **Standalone**: `python -m activity_monitor.windows_watcher [--base-url ...]`
-  POSTs each event to the running backend's ingest endpoint.
+  POSTs each event to the running backend's ingest endpoint (`--tray` adds a
+  tray icon showing the backend connection state while it runs).
 - **Embedded**: the backend starts it in-process (see `--watch-windows` /
   `general.watch_windows`) and events are written straight to the database.
 """
@@ -56,6 +57,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib import request
+
+from activity_monitor.tray import TrayIcon
 
 if TYPE_CHECKING:
     from activity_monitor.sources import SourceProvider
@@ -275,10 +278,12 @@ class HttpSink:
         certfile: str | None = None,
         keyfile: str | None = None,
         insecure: bool = False,
+        on_status: Callable[[bool], None] | None = None,
     ) -> None:
         self.url = f"{base_url.rstrip('/')}/api/ingest/{source}"
         self._context = build_ssl_context(cafile=cafile, certfile=certfile, keyfile=keyfile, insecure=insecure)
         self._auth = build_auth_header(username=username, password=password)
+        self._on_status = on_status
 
     def __call__(self, payload: dict[str, Any]) -> bool:
         headers = {"Content-Type": "application/json"}
@@ -286,16 +291,22 @@ class HttpSink:
         if self._auth is not None:
             headers["Authorization"] = self._auth
 
+        delivered = False
+
         for _ in range(3):
             req = request.Request(self.url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
 
             try:
                 with request.urlopen(req, timeout=5, context=self._context):
-                    return True
+                    delivered = True
+                    break
             except OSError:
                 continue
 
-        return False
+        if self._on_status is not None:
+            self._on_status(delivered)
+
+        return delivered
 
 
 class DatabaseSink:
@@ -674,6 +685,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--run", type=float, default=None, help="exit after N seconds (testing)")
     parser.add_argument("--once", action="store_true", help="sample once and exit (testing)")
+    parser.add_argument("--tray", action="store_true", help="show a tray icon with the backend connection state")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
 
@@ -681,6 +693,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     base_url = args.base_url or default_base_url()
+    stop = threading.Event()
+    tray: TrayIcon | None = None
+
+    if args.tray:
+        # The tray icon reports the sink's delivery result, and its Exit entry
+        # stops the watcher loop.
+        tray = TrayIcon(f"Activity Monitor — {base_url.rstrip('/')}", on_exit=stop.set)
+        tray.start()
+
     sink = HttpSink(
         base_url,
         args.source,
@@ -690,6 +711,7 @@ def main(argv: list[str] | None = None) -> int:
         certfile=args.client_cert,
         keyfile=args.client_key,
         insecure=args.insecure,
+        on_status=tray.set_state if tray is not None else None,
     )
     watcher = WindowsWatcher(
         sink,
@@ -704,8 +726,14 @@ def main(argv: list[str] | None = None) -> int:
         verbose=args.verbose,
     )
     print(f"[watcher] pushing '{args.source}' events to {base_url.rstrip('/')}", flush=True)
-    until = datetime.now(UTC) + timedelta(seconds=args.run) if args.run is not None else None
-    watcher.run(once=args.once, until=until)
+
+    try:
+        until = datetime.now(UTC) + timedelta(seconds=args.run) if args.run is not None else None
+        watcher.run(once=args.once, until=until, stop=stop)
+    finally:
+        if tray is not None:
+            tray.stop()
+
     return 0
 
 

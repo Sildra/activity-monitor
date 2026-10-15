@@ -6,7 +6,7 @@ import base64
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -297,6 +297,7 @@ def test_parse_args_defaults() -> None:
     assert args.client_key is None
     assert args.insecure is False
     assert args.heartbeat_seconds == 60.0
+    assert args.tray is False
 
 
 def test_parse_args_overrides() -> None:
@@ -324,6 +325,7 @@ def test_parse_args_overrides() -> None:
             "client.key",
             "--heartbeat-seconds",
             "5",
+            "--tray",
             "--insecure",
         ]
     )
@@ -340,6 +342,7 @@ def test_parse_args_overrides() -> None:
     assert args.client_key == "client.key"
     assert args.insecure is True
     assert args.heartbeat_seconds == 5.0
+    assert args.tray is True
 
 
 def test_host_option_sets_event_host(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -395,3 +398,38 @@ def test_auth_header_none_without_username(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.delenv("ACTIVITY_MONITOR_USERNAME", raising=False)
 
     assert windows_watcher.build_auth_header() is None
+
+
+# -- sink status reporting (tray icon) ----------------------------------------
+
+
+class FakeResponse:
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+def test_http_sink_reports_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    windows_watcher = load_watcher_module()
+    states: list[bool] = []
+    monkeypatch.setattr(windows_watcher.request, "urlopen", lambda *args, **kwargs: FakeResponse())
+    sink = windows_watcher.HttpSink("http://localhost:8001", "windows", on_status=states.append)
+
+    assert sink({"kind": "heartbeat"}) is True
+    assert states == [True]
+
+
+def test_http_sink_reports_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    windows_watcher = load_watcher_module()
+    states: list[bool] = []
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(windows_watcher.request, "urlopen", refuse)
+    sink = windows_watcher.HttpSink("http://localhost:8001", "windows", on_status=states.append)
+
+    assert sink({"kind": "heartbeat"}) is False
+    assert states == [False]

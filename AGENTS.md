@@ -45,15 +45,24 @@ React/TS/Vite frontend, single server serving the built frontend.
   `task.set` (see Ingest). `opencode-v1/`
   holds the legacy V1 implementation (`@opencode-ai/plugin`, `command.execute.before` + throw to
   abort) for OpenCode 1 — V1 plugins do not run on V2. Its sidebar indicator is a separate,
-  target-exclusive TUI module (`tui.tsx`, loaded from `tui.json`) that subscribes to a namespaced
-  `tui.command.execute` event the server half publishes
-  (`activity-monitor:<pending|ok|error|shadow>`), since V1 has no server↔TUI RPC bridge.
+  target-exclusive TUI module (`tui.tsx`, loaded from `tui.json`) that subscribes to namespaced
+  `tui.command.execute` events the server half publishes — the connection state as
+  `activity-monitor:<pending|ok|error|shadow>`, a session's task as
+  `activity-monitor:task:<sessionID>:<task>` — re-publishing the state (and every pinned task along
+  with it) on each heartbeat so a TUI that subscribes after the initial publish still converges,
+  since V1 has no server↔TUI RPC bridge.
   `index.ts` also tracks the connection state
-  (`pending`/`ok`/`error`, or `shadow` while silent) and publishes it over the plugin RPC contract
-  in `rpc.ts`; `tui.tsx` (the package's `./tui` entry, loaded by the CLI automatically) subscribes to
-  it and renders a single coloured `● Activity Monitor` row in the TUI sidebar (`sidebar.content`,
-  below the built-in MCP and Context sections) — green = last request succeeded, red = failed, gray =
-  shadow/pending. This is an OpenCode-only affordance, never sent to the Activity Monitor. Typecheck
+  (`pending`/`ok`/`error`, or `shadow` while silent) and each session's `/task` id, publishing both
+  over the plugin RPC contract in `rpc.ts` (`status`/`task` methods + `state`/`task` events);
+  `tui.tsx` (the package's `./tui` entry, loaded by the CLI automatically) subscribes to them and
+  renders a single coloured `● Activity Monitor (<task>) <state>` row in the TUI sidebar
+  (`sidebar.content`, below the built-in MCP and Context sections) — green = last request succeeded,
+  red = failed, gray = shadow/pending, with the `(<task>)` part omitted until the session pins one
+  with `/task`. The TUI seeds the state once and each session's task on first render
+  (`rpc.status({}, { location })` / `rpc.task({ sessionID }, { location })`): the RPC domain is
+  registered per location, so the calls must name the TUI's location (else `rpc.unavailable`) and
+  carry the method's required input. This is an OpenCode-only affordance, never sent to the Activity
+  Monitor. Typecheck
   with `npm run typecheck` in the plugin folder. Restart opencode after editing the plugin.
 - `plugins/git/` — `post-commit` + `pre-push` git hooks POSTing to `/api/ingest/git`; commit
   registers branch + commit id (+ repo/author/subject), push registers remote + branch + commit +
@@ -90,8 +99,12 @@ React/TS/Vite frontend, single server serving the built frontend.
   watcher also takes flags mirroring every client variable (`--base-url`, `--source`, `--actor`,
   `--host`, `--task`, `--username`, `--password`, `--ca-cert`, `--client-cert`, `--client-key`,
   `--insecure`) plus `--poll`/`--idle-minutes`/`--skew-seconds`/`--heartbeat-seconds`; a flag wins
-  over its env var.
-  Restart it after editing.
+  over its env var. `--tray` puts a tray icon in the notification area while the standalone watcher
+  runs (`activity_monitor/tray.py`, ctypes `Shell_NotifyIcon` + a message-loop thread): green = the
+  last event delivery succeeded, red = it failed, gray = nothing sent yet; the tooltip/menu show the
+  state and an `Exit` entry stops the watcher. The backend takes `--tray` too (see **Run**), reusing
+  the same icon: green = it finished starting, `Exit` asks uvicorn for a graceful shutdown. Restart it
+  after editing.
 - `tests/` — pytest (`TestClient`, temp config/db)
 
 ## Backend (FastAPI, Python 3.12)
@@ -99,6 +112,8 @@ React/TS/Vite frontend, single server serving the built frontend.
 - **Run**: `python -m activity_monitor.main` from repo root. Flags: `--config` (default
   `config.yaml`), `--database`, `--port` (default from config, 8001), `--openapi FILE`,
   `--watch-windows` (embed the desktop watcher; or `general.watch_windows` in config),
+  `--tray` (the same tray icon as the watcher's, green = the app finished starting, `Exit` stops the
+  server; Windows only — `supervisor.py` forwards argv, so `python supervisor.py --tray` works too),
   `--basic-auth-username`/`--basic-auth-password` (require HTTP Basic auth on `/api/*`).
 - **Intentionally minimal**: no services framework, no thread pool, no pipeline engine, no
   statistics. Direct async DB access from handlers. Keep it that way unless there is a real need.

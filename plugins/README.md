@@ -206,11 +206,26 @@ the built-in MCP and Context sections (`sidebar.content`):
 - **gray** — the plugin is not reporting (`ACTIVITY_MONITOR_SHADOW`, or a
   `/shadow` turn in flight) or has not reported yet.
 
-The state lives in the server half of the plugin (`index.ts`), which updates it
-on every `POST` and publishes it over the plugin RPC contract in `rpc.ts` (a
-`status` method plus a `state` event). `tui.tsx` — the package's `./tui` entry,
-which the OpenCode CLI loads automatically because the plugin directory is in
-`opencode.json` — subscribes to that RPC and renders the indicator. The sidebar
+The line also carries the task the open session pinned with `/task`, between the
+name and the state:
+
+```
+● Activity Monitor (AM-123) Connected
+```
+
+The task is left out until one is pinned (`/task` with no id clears it again).
+
+The state and the task live in the server half of the plugin (`index.ts`), which
+updates them on every `POST` and on `/task`, and publishes them over the plugin
+RPC contract in `rpc.ts` (a `status` and a `task` method, plus a `state` and a
+`task` event). `tui.tsx` — the package's `./tui` entry, which the OpenCode CLI
+loads automatically because the plugin directory is in `opencode.json` —
+subscribes to that RPC and renders the indicator. The server half can finish
+reporting before the TUI half subscribes, so the TUI also seeds the current
+state once with `status`, and each session's task the first time it renders that
+session; those calls name the TUI's location and pass the methods' required
+input objects, because an RPC domain is registered per location and a call
+without one answers `rpc.unavailable`. The sidebar
 is only shown for a session and when the terminal is wide enough to fit it. This
 is an OpenCode-only affordance: nothing about it is sent to the Activity Monitor
 or shown in its web UI.
@@ -220,8 +235,9 @@ or shown in its web UI.
 The V1 plugin shows the same indicator, but as a **separate file**
 (`opencode-v1/tui.tsx`): OpenCode 1 loads a TUI plugin from its own module, and a
 module may export `server` or `tui`, never both. It renders the same single
-coloured `Activity Monitor` line right after the MCP section (green = last report
-succeeded, red = failed, gray = shadow/pending).
+coloured `● Activity Monitor (<task>) <state>` line right after the MCP section
+(green = last report succeeded, red = failed, gray = shadow/pending), with the
+`(<task>)` part left out until the session pins one with `/task`.
 
 Load it from `tui.json` (the TUI plugin list; paths resolve relative to that
 file, so use an absolute path to share one clone):
@@ -234,12 +250,18 @@ file, so use an absolute path to share one clone):
 ```
 
 V1 has no RPC bridge between a plugin's server and TUI halves, so
-`opencode-activity.ts` hands the state to `tui.tsx` over the one server→TUI
-channel the SDK exposes: it publishes a namespaced `tui.command.execute` event
-(`activity-monitor:ok`, `:error`, `:shadow` or `:pending`), and `tui.tsx`
-subscribes to that event and renders the line. The publish is best-effort — a
-headless server (or an older client without `tui.publish`) simply never updates
-the indicator. As with V2, nothing about it is sent to the Activity Monitor.
+`opencode-activity.ts` hands both to `tui.tsx` over the one server→TUI channel
+the SDK exposes: it publishes namespaced `tui.command.execute` events — the state
+as `activity-monitor:ok`, `:error`, `:shadow` or `:pending`, and a session's task
+as `activity-monitor:task:<sessionID>:<task>` — and `tui.tsx` subscribes to them
+and renders the line. The task is matched against the session the sidebar slot is
+rendering for, so each session gets its own label. The state is published on
+every change and re-published on each heartbeat, with every pinned task riding
+along, so a TUI half that subscribes after the initial publish (it loads later
+than the server half) still picks up the current label instead of sitting on
+"Connecting". The publish is best-effort — a headless server (or an older client
+without `tui.publish`) simply never updates the indicator. As with V2, nothing
+about it is sent to the Activity Monitor.
 
 ## Standalone Windows monitor
 

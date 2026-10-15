@@ -205,6 +205,7 @@ export default Plugin.define({
         // request outcome.
         const connection = { state: "pending" as ConnectionState, message: "" };
         let emitState: ((data: { state: string; message: string }) => void) | undefined;
+        let emitTask: ((data: { sessionID: string; task: string }) => void) | undefined;
         let publishedState = "";
 
         const currentState = (): { state: string; message: string } =>
@@ -241,16 +242,27 @@ export default Plugin.define({
             console.warn(`[activity-monitor] ${message}`);
         };
 
-        // Expose the state to the TUI plugin over the shared RPC contract so the
-        // OpenCode footer can render it (see tui.tsx). Best effort: older builds
-        // without the RPC domain must not break the rest of the plugin.
+        // Expose the state and the per-session task to the TUI plugin over the
+        // shared RPC contract so the OpenCode sidebar can render them (see
+        // tui.tsx). Best effort: older builds without the RPC domain must not
+        // break the rest of the plugin.
         try {
             const registration = await ctx.rpc.register(ActivityMonitor, {
                 status: async () => currentState(),
+                task: async (input) => {
+                    const data = (input ?? {}) as Record<string, unknown>;
+                    const sessionID = typeof data.sessionID === "string" ? data.sessionID : "";
+
+                    return { task: sessionTasks.get(sessionID) ?? "" };
+                },
             });
 
             emitState = (data) => {
                 void registration.events.emit("state", data);
+            };
+
+            emitTask = (data) => {
+                void registration.events.emit("task", data);
             };
         } catch (error) {
             report(`rpc registration failed: ${(error as Error).message}`);
@@ -261,7 +273,16 @@ export default Plugin.define({
         const sessionTask = (sessionID: string | undefined): string | undefined =>
             sessionID !== undefined ? sessionTasks.get(sessionID) : undefined;
 
-        const post = async (path: string, body: unknown, attempts = 1, backoffMs = 750): Promise<boolean> => {
+        // `on_status` hands the HTTP status of a rejected reply back to the caller
+        // so it can tell a meaningful answer (404 = the backend has no such
+        // program) from a plain failure to report.
+        const post = async (
+            path: string,
+            body: unknown,
+            attempts = 1,
+            backoffMs = 750,
+            on_status?: (status: number) => void,
+        ): Promise<boolean> => {
             if (shadowAll) {
                 return true;
             }
@@ -280,6 +301,7 @@ export default Plugin.define({
                     }
 
                     failure = `${path} rejected (${response.status})`;
+                    on_status?.(response.status);
                 } catch (error) {
                     failure = `${path} failed: ${(error as Error).message}`;
                 }
@@ -296,16 +318,33 @@ export default Plugin.define({
         const ingest = (event: Record<string, unknown>): Promise<boolean> =>
             post(`/api/ingest/${encodeURIComponent(source)}`, { ...event, host });
 
-        const beat = (): Promise<boolean> => post("/api/programs/beat", { program_id: programId });
+        const register = (): Promise<boolean> =>
+            post("/api/programs/start", { program_id: programId, source, host, actor: opts.actor }, 8, 1000);
+
+        const beat = async (): Promise<boolean> => {
+            let missing = false;
+
+            const sent = await post("/api/programs/beat", { program_id: programId }, 1, 750, (status) => {
+                missing = status === 404;
+            });
+
+            if (sent || !missing) {
+                return sent;
+            }
+
+            // The backend answered, but has no active program for this id: the
+            // first `start` ran while it was down, or the row was expired. Re-run
+            // it so presence recovers instead of 404ing on every beat. A failed
+            // beat that never reached the backend (network error) is not 404 and
+            // is left alone — that one just gets reported.
+            await register();
+
+            return post("/api/programs/beat", { program_id: programId }, 1);
+        };
 
         const programEvents = (): { id: string; source: string; host: string } => ({ id: programId, source, host });
 
-        await post(
-            "/api/programs/start",
-            { program_id: programId, source, host, actor: opts.actor },
-            8,
-            1000,
-        );
+        await register();
 
         const interval = setInterval(() => {
             void beat();
@@ -608,11 +647,16 @@ export default Plugin.define({
                         .replace(/^Set the Activity Monitor task to:\s*/i, "")
                         .replace(/^["']|["']$/g, "")
                         .trim();
+                    const previous = sessionTask(input.sessionID) ?? "";
 
                     if (task) {
                         sessionTasks.set(input.sessionID, task);
                     } else {
                         sessionTasks.delete(input.sessionID);
+                    }
+
+                    if (task !== previous) {
+                        emitTask?.({ sessionID: input.sessionID, task });
                     }
 
                     await ingest({
