@@ -16,6 +16,7 @@ at your server.
 | `ACTIVITY_MONITOR_DISPLAY_USER` | OS username | all clients (overrides the event `actor`) |
 | `ACTIVITY_MONITOR_ORIGIN` | OS hostname | all clients (origin `host` carried on every event) |
 | `ACTIVITY_MONITOR_TASK` | — | Windows watcher (task stamped on `focus` events) |
+| `ACTIVITY_MONITOR_PROCESS_CONFIG` | — | Windows watcher (YAML file renaming/redacting/deriving focus tasks) |
 | `ACTIVITY_MONITOR_SHADOW` | — | opencode plugin (silent mode, `1`/`true`/`yes`/`on`) |
 | `ACTIVITY_MONITOR_CA_CERT` | — | all clients (verify server, private CA) |
 | `ACTIVITY_MONITOR_CLIENT_CERT` | — | all clients (mTLS client certificate) |
@@ -41,10 +42,11 @@ server, so events from different machines can be told apart.
 
 ## Task
 
-The Windows watcher stamps each `focus` event's task with the foreground process. Set
-`ACTIVITY_MONITOR_TASK` (e.g. a Jira id) to tag them with that task instead, so desktop
-activity lines up with the matching git commits (`TASK_PATTERN`) and opencode prompts
-(the `/task` command).
+The Windows watcher reports each `focus` event's task as `Unknown` — a task is a unit
+of work, never a process; the foreground process travels in the event's data instead.
+Set `ACTIVITY_MONITOR_TASK` (e.g. a Jira id) to stamp that task on every focus event,
+so desktop activity lines up with the matching git commits (`TASK_PATTERN`) and
+opencode prompts (the `/task` command).
 
 ## TLS / mTLS
 
@@ -129,6 +131,19 @@ recommended):
 }
 ```
 
+On OpenCode 1 the same `plugins` list enables the V1 server half — point at the
+file itself (V1 loads `.ts` paths directly):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["C:/path/to/activity_monitor/plugins/opencode-v1/opencode-activity.ts"]
+}
+```
+
+Without that entry nothing from OpenCode 1 is reported, and the V1 TUI
+indicator (below) has nothing feeding it — it just sits on `Connecting`.
+
 Make sure `ACTIVITY_MONITOR_URL` (or legacy `ACTIVITY_MONITOR_PORT`/`ACTIVITY_MONITOR_BASE_URL`)
 is set before opencode starts, then **restart opencode** whenever the plugin changes.
 The plugin posts to `POST /api/ingest/opencode` and registers its heartbeat via
@@ -139,9 +154,10 @@ for HTTP Basic auth, set `ACTIVITY_MONITOR_USERNAME` / `ACTIVITY_MONITOR_PASSWOR
 
 Run `/task <id>` (e.g. `/task JIRA-123`) to pin the session to a task: the plugin
 records a `task.set` event and tags subsequent `prompt.begin`/`prompt.end` events
-with that id (`/task` by itself clears it). Work done before a `/task` carries no
-task; on ingest the backend backfills the program's earlier untagged events up to
-the previous `task.set`, so the id you set late still covers the work you already
+with that id (`/task` by itself clears it). Work done before a `/task` is reported
+under the default task `Unknown`; on ingest the backend backfills the program's
+`Unknown`/untagged events up to the previous `task.set`, so the id you set late
+still covers the work you already
 did — without touching an earlier task's range. The V2 plugin registers `/task` as a
 real command whose executor does not submit a prompt, so the model never runs
 (the V1 plugin achieved the same by intercepting and aborting the command).
@@ -151,11 +167,18 @@ Monitor: the prompt still runs, but no `prompt.begin`/`prompt.end` (or any other
 event is sent for that turn. The plugin strips the `/shadow` prefix in the prompt
 hook (V2) or message hook (V1), so the model receives the real text.
 
+Run `/shadow` with no argument to toggle a permanent shadow for that session:
+while it is on, nothing the session produces is reported (prompts, permission
+and question events, task changes) and the TUI indicator shows `shadow`; run
+`/shadow` again to turn it off. The bare command submits no prompt, so no model
+turn happens.
+
 Set `ACTIVITY_MONITOR_SHADOW=1` (also `true`/`yes`/`on`) to do the same for the
 whole session: the plugin becomes completely silent and sends nothing to the
 Activity Monitor (no program lifecycle, no prompts). The option is read when
 opencode starts, so restart opencode after changing it. This is a process-wide
-kill switch; `/shadow` only affects the single prompt it precedes.
+kill switch; `/shadow` only ever affects its own session — one prompt with an
+argument, the whole session without one.
 
 While a prompt is blocked on a tool approval, the plugin reports the wait:
 `permission.asked` when the approval prompt appears and `permission.replied`
@@ -203,8 +226,9 @@ the built-in MCP and Context sections (`sidebar.content`):
 
 - **green** — the last report to the Activity Monitor succeeded.
 - **red** — the last report failed (the failure message is in the plugin log).
-- **gray** — the plugin is not reporting (`ACTIVITY_MONITOR_SHADOW`, or a
-  `/shadow` turn in flight) or has not reported yet.
+- **gray** — the plugin is not reporting (`ACTIVITY_MONITOR_SHADOW`, a
+  `/shadow` turn in flight, or a session sitting in the permanent shadow a bare
+  `/shadow` toggled on) or has not reported yet.
 
 The line also carries the task the open session pinned with `/task`, between the
 name and the state:
@@ -256,12 +280,16 @@ as `activity-monitor:ok`, `:error`, `:shadow` or `:pending`, and a session's tas
 as `activity-monitor:task:<sessionID>:<task>` — and `tui.tsx` subscribes to them
 and renders the line. The task is matched against the session the sidebar slot is
 rendering for, so each session gets its own label. The state is published on
-every change and re-published on each heartbeat, with every pinned task riding
-along, so a TUI half that subscribes after the initial publish (it loads later
-than the server half) still picks up the current label instead of sitting on
-"Connecting". The publish is best-effort — a headless server (or an older client
-without `tui.publish`) simply never updates the indicator. As with V2, nothing
-about it is sent to the Activity Monitor.
+every change and then mirrored every few seconds (and on each heartbeat), with
+every pinned task riding along, so a TUI half that subscribes after the initial
+publish — it loads later than the server half, and may restart against a
+long-lived server — picks up the current label within seconds instead of
+sitting on "Connecting". The publish is best-effort: a headless server (or an
+older client without `tui.publish`) simply never updates the indicator, and a
+rejected publish — the SDK resolves errors instead of throwing, which used to
+swallow them entirely — is logged once per distinct failure as
+`[activity-monitor] tui publish ...` in the opencode log so a broken channel is
+visible. As with V2, nothing about it is sent to the Activity Monitor.
 
 ## Standalone Windows monitor
 

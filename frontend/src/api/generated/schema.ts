@@ -529,8 +529,8 @@ export interface components {
         };
         /** UserLane */
         UserLane: {
-            /** Process */
-            process: string;
+            /** Task */
+            task: string;
             /** Label */
             label: string;
             /**

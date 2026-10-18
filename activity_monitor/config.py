@@ -30,6 +30,7 @@ class AppConfig:
     session_gap_minutes: int = DEFAULT_SESSION_GAP_MINUTES
     stale_after_seconds: int = DEFAULT_STALE_AFTER_SECONDS
     watch_windows: bool = False
+    process_config: str | None = None
     sources: dict[str, dict[str, Any]] = field(default_factory=dict)
     pipelines: list[dict[str, Any]] = field(default_factory=list)
     scanners: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -60,6 +61,7 @@ class AppConfig:
             session_gap_minutes=int(session.get("gap_minutes", DEFAULT_SESSION_GAP_MINUTES)),
             stale_after_seconds=int(general.get("stale_after_seconds", DEFAULT_STALE_AFTER_SECONDS)),
             watch_windows=bool(general.get("watch_windows", False)),
+            process_config=_optional_str(general.get("process_config")),
             ssl_enabled=bool(general.get("ssl_enabled", False)),
             ssl_certfile=general.get("ssl_certfile"),
             ssl_keyfile=general.get("ssl_keyfile"),

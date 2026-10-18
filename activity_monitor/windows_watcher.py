@@ -51,13 +51,15 @@ import json
 import os
 import socket
 import ssl
+import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib import request
 
+from activity_monitor.process_config import ProcessConfigError, ProcessRule, apply_rules, load_process_config
 from activity_monitor.tray import TrayIcon
 
 if TYPE_CHECKING:
@@ -120,12 +122,22 @@ def local_host() -> str:
     return os.environ.get("ACTIVITY_MONITOR_ORIGIN") or socket.gethostname()
 
 
+UNKNOWN_TASK = "Unknown"
+"""Default task for focus events when no ``ACTIVITY_MONITOR_TASK`` is set.
+
+A task is a unit of work, never a process: the foreground process travels in the
+event's ``process`` field instead (``data.raw.process`` server-side).
+"""
+
+
 def env_task() -> str | None:
     """Explicit task for desktop events (``ACTIVITY_MONITOR_TASK``), if set.
 
     Tasks tie activity together across sources; setting this tags every ``focus``
-    event (e.g. a Jira id) instead of the foreground process name, so desktop
-    activity groups with the matching git commits and opencode prompts.
+    event (e.g. a Jira id) so desktop activity groups with the matching git
+    commits and opencode prompts. Without it focus events report ``UNKNOWN_TASK``
+    — a task is a unit of work, never a process; the foreground process travels
+    in the event's ``process`` field.
     """
     return os.environ.get("ACTIVITY_MONITOR_TASK") or None
 
@@ -348,6 +360,7 @@ class WindowsWatcher:
         skew_seconds: float = DEFAULT_SKEW_SECONDS,
         heartbeat: float = DEFAULT_HEARTBEAT_SECONDS,
         verbose: bool = False,
+        process_rules: Sequence[ProcessRule] = (),
     ) -> None:
         self._sink = sink
         self.source = source
@@ -359,6 +372,7 @@ class WindowsWatcher:
         self.skew_threshold = skew_seconds
         self.heartbeat = timedelta(seconds=heartbeat)
         self.verbose = verbose
+        self.process_rules = tuple(process_rules)
 
         self._seq = 0
         self._pending: list[dict[str, Any]] = []
@@ -452,6 +466,27 @@ class WindowsWatcher:
         # locked to sleep, so a lock that preceded the sleep is never doubled.
         self.enter_lock(last_wall, detail=f"machine suspended ({skew:.0f}s clock skew)")
 
+    def _focus_fields(self, source: dict[str, Any]) -> dict[str, str]:
+        """Focus event fields for one sampled window, after the process config.
+
+        The configured couples rewrite the program name/title and may derive
+        the task from them — the task comes from configuration (then the
+        explicit `task` fallback, then `Unknown`), never from the raw process
+        name. A rewritten name also takes over `detail`, so a redacted program
+        does not leak its image path.
+        """
+        name = str(source["process"] or "")
+        title = str(source["title"] or "")
+        new_name, new_title, rule_task = apply_rules(self.process_rules, name, title)
+        detail = new_name if new_name != name else str(source["image"] or f"pid {source['pid']}")
+
+        return {
+            "title": new_title,
+            "task": rule_task or self.task or UNKNOWN_TASK,
+            "process": new_name,
+            "detail": detail,
+        }
+
     def _emit_focus(self, current: dict[str, Any] | None, now: datetime) -> None:
         """Close the previous focus span and open the next one."""
         previous = self._focus
@@ -460,10 +495,8 @@ class WindowsWatcher:
             self.event(
                 kind="focus",
                 timestamp=now,
-                title=previous["title"],
-                task=self.task or previous["process"],
-                detail=previous["image"] or f"pid {previous['pid']}",
                 duration_ms=max(0.0, (now - self._focus_start).total_seconds()) * 1000.0,
+                **self._focus_fields(previous),
             )
 
         self._hwnd = current["hwnd"] if current else None
@@ -471,13 +504,7 @@ class WindowsWatcher:
         self._focus_start = now if current else None
 
         if current is not None:
-            self.event(
-                kind="focus",
-                timestamp=now,
-                title=current["title"],
-                task=self.task or current["process"],
-                detail=current["image"] or f"pid {current['pid']}",
-            )
+            self.event(kind="focus", timestamp=now, **self._focus_fields(current))
 
     def sample_focus(self, now: datetime) -> None:
         current = foreground_window()
@@ -543,14 +570,7 @@ class WindowsWatcher:
 
         if self._focus is not None and self._focus_start is not None:
             duration = (now - self._focus_start).total_seconds() * 1000.0
-            self.event(
-                kind="focus",
-                timestamp=now,
-                title=self._focus["title"],
-                task=self.task or self._focus["process"],
-                detail=self._focus["image"] or f"pid {self._focus['pid']}",
-                duration_ms=max(0.0, duration),
-            )
+            self.event(kind="focus", timestamp=now, duration_ms=max(0.0, duration), **self._focus_fields(self._focus))
             self._hwnd = None
             self._focus = None
             self._focus_start = None
@@ -618,6 +638,7 @@ def start_database_watcher(
     skew_seconds: float = DEFAULT_SKEW_SECONDS,
     heartbeat: float = DEFAULT_HEARTBEAT_SECONDS,
     verbose: bool = False,
+    process_rules: Sequence[ProcessRule] = (),
 ) -> tuple[threading.Event, threading.Thread]:
     """Start the watcher in-process, writing events straight to the database."""
 
@@ -630,6 +651,7 @@ def start_database_watcher(
         skew_seconds=skew_seconds,
         heartbeat=heartbeat,
         verbose=verbose,
+        process_rules=process_rules,
     )
     stop = threading.Event()
     thread = threading.Thread(target=watcher.run, kwargs={"stop": stop}, name="windows-watcher", daemon=True)
@@ -651,7 +673,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--host", default=None, help="origin host on events (default $ACTIVITY_MONITOR_ORIGIN or the OS hostname)"
     )
     parser.add_argument(
-        "--task", default=None, help="task stamped on focus events (default $ACTIVITY_MONITOR_TASK or the process)"
+        "--task", default=None, help="task stamped on focus events (default $ACTIVITY_MONITOR_TASK, else Unknown)"
     )
     parser.add_argument(
         "--username", default=None, help="HTTP Basic auth username (default $ACTIVITY_MONITOR_USERNAME)"
@@ -683,6 +705,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_HEARTBEAT_SECONDS,
         help="emit a liveness heartbeat this often so the server knows the watcher is still running",
     )
+    parser.add_argument(
+        "--process-config",
+        default=os.environ.get("ACTIVITY_MONITOR_PROCESS_CONFIG"),
+        help="YAML file of process input/output couples renaming or redacting focus events "
+        "(default $ACTIVITY_MONITOR_PROCESS_CONFIG)",
+    )
     parser.add_argument("--run", type=float, default=None, help="exit after N seconds (testing)")
     parser.add_argument("--once", action="store_true", help="sample once and exit (testing)")
     parser.add_argument("--tray", action="store_true", help="show a tray icon with the backend connection state")
@@ -692,6 +720,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+
+    process_rules: list[ProcessRule] = []
+
+    if args.process_config:
+        try:
+            process_rules = load_process_config(args.process_config)
+        except ProcessConfigError as error:
+            print(f"[watcher] process config: {error}", file=sys.stderr)
+            return 1
+
     base_url = args.base_url or default_base_url()
     stop = threading.Event()
     tray: TrayIcon | None = None
@@ -724,6 +762,7 @@ def main(argv: list[str] | None = None) -> int:
         skew_seconds=args.skew_seconds,
         heartbeat=args.heartbeat_seconds,
         verbose=args.verbose,
+        process_rules=process_rules,
     )
     print(f"[watcher] pushing '{args.source}' events to {base_url.rstrip('/')}", flush=True)
 

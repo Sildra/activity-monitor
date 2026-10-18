@@ -196,20 +196,28 @@ export default Plugin.define({
         const sessionTasks = new Map<string, string>();
         const shadowSessions = new Set<string>();
         const shadowTurns = new Set<string>();
+        // Sessions toggled into a permanent shadow with a bare `/shadow`: nothing
+        // they produce is reported until the command is run again.
+        const shadowPermanent = new Set<string>();
         const permissionPending = new Map<string, PermissionPending>();
         const questionPending = new Map<string, QuestionPending>();
         const shadowAll = envShadow();
 
+        // A session in permanent shadow is skipped exactly like one with a
+        // shadowed turn in flight.
+        const sessionShadowed = (sessionID: string): boolean =>
+            shadowTurns.has(sessionID) || shadowPermanent.has(sessionID);
+
         // The state surfaced to the TUI footer. `shadow` is derived below rather
-        // than stored, so a global or per-turn shadow always wins over the last
-        // request outcome.
+        // than stored, so a global, per-turn or permanent shadow always wins over
+        // the last request outcome.
         const connection = { state: "pending" as ConnectionState, message: "" };
         let emitState: ((data: { state: string; message: string }) => void) | undefined;
         let emitTask: ((data: { sessionID: string; task: string }) => void) | undefined;
         let publishedState = "";
 
         const currentState = (): { state: string; message: string } =>
-            shadowAll || shadowTurns.size > 0
+            shadowAll || shadowTurns.size > 0 || shadowPermanent.size > 0
                 ? { state: "shadow", message: "" }
                 : { state: connection.state, message: connection.message };
 
@@ -270,8 +278,12 @@ export default Plugin.define({
 
         publishState();
 
-        const sessionTask = (sessionID: string | undefined): string | undefined =>
-            sessionID !== undefined ? sessionTasks.get(sessionID) : undefined;
+        // Work with no pinned task is still reported — under the default task
+        // "Unknown" — so every work event carries one, and the backend backfills
+        // these when a task is pinned later. The sidebar pin (rpc `task`) is
+        // separate and stays empty until the session actually pins one.
+        const sessionTask = (sessionID: string | undefined): string =>
+            (sessionID !== undefined ? sessionTasks.get(sessionID) : undefined) ?? "Unknown";
 
         // `on_status` hands the HTTP status of a rejected reply back to the caller
         // so it can tell a meaningful answer (404 = the backend has no such
@@ -367,7 +379,7 @@ export default Plugin.define({
                             action: data.action,
                         });
 
-                        if (shadowTurns.has(data.sessionID)) {
+                        if (sessionShadowed(data.sessionID)) {
                             continue;
                         }
 
@@ -400,7 +412,7 @@ export default Plugin.define({
 
                         permissionPending.delete(data.requestID);
 
-                        if (shadowTurns.has(data.sessionID)) {
+                        if (sessionShadowed(data.sessionID)) {
                             continue;
                         }
 
@@ -449,7 +461,7 @@ export default Plugin.define({
 
                         questionPending.set(form.id, { sessionID: form.sessionID, start, title: header });
 
-                        if (shadowTurns.has(form.sessionID)) {
+                        if (sessionShadowed(form.sessionID)) {
                             continue;
                         }
 
@@ -486,7 +498,7 @@ export default Plugin.define({
 
                         questionPending.delete(data.id);
 
-                        if (shadowTurns.has(data.sessionID)) {
+                        if (sessionShadowed(data.sessionID)) {
                             continue;
                         }
 
@@ -583,7 +595,10 @@ export default Plugin.define({
             }
 
             const text = event.prompt.text.trim();
-            const turnShadowed = shadowSessions.delete(event.sessionID) || prefix !== null;
+            const turnShadowed =
+                shadowSessions.delete(event.sessionID) ||
+                prefix !== null ||
+                shadowPermanent.has(event.sessionID);
 
             if (turnShadowed) {
                 shadowTurns.add(event.sessionID);
@@ -659,6 +674,12 @@ export default Plugin.define({
                         emitTask?.({ sessionID: input.sessionID, task });
                     }
 
+                    // A permanently shadowed session stays silent even about its task
+                    // changes (the TUI label above still updates).
+                    if (shadowPermanent.has(input.sessionID)) {
+                        return;
+                    }
+
                     await ingest({
                         id: stableId("task", input.sessionID, task),
                         kind: "task.set",
@@ -675,13 +696,24 @@ export default Plugin.define({
 
             // /shadow <prompt> submits the prompt normally but marks the session so the
             // prompt hook skips reporting for that turn (a per-turn ACTIVITY_MONITOR_SHADOW).
+            // A bare /shadow submits nothing and instead toggles a permanent shadow for
+            // the session: every later prompt, permission, question and task change in it
+            // goes unreported until /shadow is run again.
             editor.add({
                 name: "shadow",
-                description: "Send a prompt without reporting it to the Activity Monitor",
+                description: "Send a prompt without reporting it (/shadow alone toggles a permanent shadow for the session)",
                 execute: async (input) => {
                     const text = input.prompt.text.replace(/^\s*\/shadow\b\s*/i, "").trim();
 
                     if (!text) {
+                        if (shadowPermanent.has(input.sessionID)) {
+                            shadowPermanent.delete(input.sessionID);
+                        } else {
+                            shadowPermanent.add(input.sessionID);
+                        }
+
+                        publishState();
+
                         return;
                     }
 

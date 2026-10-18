@@ -40,8 +40,9 @@ React/TS/Vite frontend, single server serving the built frontend.
   `/task <id>` command is registered by the plugin via `ctx.command.transform` — its executor never
   submits a prompt, so no model turn happens; it records a `task.set` event and pins subsequent
   prompts of that session to the id (a `sessionTasks` map; `/task` alone clears it). Before any
-  `/task` an event carries no task (the old project-name default was dropped so the backend can
-  backfill); on ingest the backend retags the program's earlier untagged events up to the previous
+  `/task` an event carries the default task `Unknown` (the old project-name default was dropped so
+  the backend can backfill); on ingest the backend retags the program's `Unknown`/untagged events up
+  to the previous
   `task.set` (see Ingest). `opencode-v1/`
   holds the legacy V1 implementation (`@opencode-ai/plugin`, `command.execute.before` + throw to
   abort) for OpenCode 1 — V1 plugins do not run on V2. Its sidebar indicator is a separate,
@@ -49,8 +50,11 @@ React/TS/Vite frontend, single server serving the built frontend.
   `tui.command.execute` events the server half publishes — the connection state as
   `activity-monitor:<pending|ok|error|shadow>`, a session's task as
   `activity-monitor:task:<sessionID>:<task>` — re-publishing the state (and every pinned task along
-  with it) on each heartbeat so a TUI that subscribes after the initial publish still converges,
-  since V1 has no server↔TUI RPC bridge.
+  with it) every few seconds on a short sync timer (decoupled from the 60s heartbeat, which only
+  mirrors it) so a TUI that subscribes after the initial publish — or restarts against a long-lived
+  server — converges within seconds; rejected publishes log once each as
+  `[activity-monitor] tui publish ...` instead of vanishing (the SDK resolves errors rather than
+  throwing), since V1 has no server↔TUI RPC bridge.
   `index.ts` also tracks the connection state
   (`pending`/`ok`/`error`, or `shadow` while silent) and each session's `/task` id, publishing both
   over the plugin RPC contract in `rpc.ts` (`status`/`task` methods + `state`/`task` events);
@@ -84,8 +88,10 @@ React/TS/Vite frontend, single server serving the built frontend.
   (the `windows` Push source). Stdlib `ctypes` only; each event carries a unique `id` so re-sends
   dedupe, plus a `host` (`ACTIVITY_MONITOR_ORIGIN` or the OS hostname) and an `actor`
   (`ACTIVITY_MONITOR_DISPLAY_USER` or `--actor`, else `user`). Each `focus` event's `task`
-  is the foreground process name, or `ACTIVITY_MONITOR_TASK` when set — the desktop counterpart of
-  the git `TASK_PATTERN` / opencode `/task`, so one task ties the sources together. Each tick also
+  is `ACTIVITY_MONITOR_TASK` when set (the desktop counterpart of the git `TASK_PATTERN` /
+  opencode `/task`, so one task ties the sources together), else the default `Unknown` — a task
+  is a unit of work, never a process; the foreground process travels in the event's `process`
+  field (`data.raw.process` server-side). Each tick also
   compares the wall clock against the unbiased interrupt-time count
   (`QueryUnbiasedInterruptTime`, which stops during sleep) and, on a divergence over `skew_seconds`
   (default 30), enters the locked state at the last pre-sleep tick — closed by the normal lock
@@ -97,14 +103,14 @@ React/TS/Vite frontend, single server serving the built frontend.
   alive; an open `focus`/`idle`/`lock` span is only trusted while events keep arriving (see User
   timeline). The standalone
   watcher also takes flags mirroring every client variable (`--base-url`, `--source`, `--actor`,
-  `--host`, `--task`, `--username`, `--password`, `--ca-cert`, `--client-cert`, `--client-key`,
-  `--insecure`) plus `--poll`/`--idle-minutes`/`--skew-seconds`/`--heartbeat-seconds`; a flag wins
-  over its env var. `--tray` puts a tray icon in the notification area while the standalone watcher
-  runs (`activity_monitor/tray.py`, ctypes `Shell_NotifyIcon` + a message-loop thread): green = the
-  last event delivery succeeded, red = it failed, gray = nothing sent yet; the tooltip/menu show the
-  state and an `Exit` entry stops the watcher. The backend takes `--tray` too (see **Run**), reusing
-  the same icon: green = it finished starting, `Exit` asks uvicorn for a graceful shutdown. Restart it
-  after editing.
+  `--host`, `--task`, `--process-config`, `--username`, `--password`, `--ca-cert`, `--client-cert`,
+  `--client-key`, `--insecure`) plus `--poll`/`--idle-minutes`/`--skew-seconds`/`--heartbeat-seconds`;
+  a flag wins over its env var (`ACTIVITY_MONITOR_PROCESS_CONFIG`). `--tray` puts a tray icon in
+  the notification area while the standalone watcher runs (`activity_monitor/tray.py`, ctypes
+  `Shell_NotifyIcon` + a message-loop thread): green = the last event delivery succeeded, red = it
+  failed, gray = nothing sent yet; the tooltip/menu show the state and an `Exit` entry stops the
+  watcher. The backend takes `--tray` too (see **Run**), reusing the same icon: green = it finished
+  starting, `Exit` asks uvicorn for a graceful shutdown. Restart it after editing.
 - `tests/` — pytest (`TestClient`, temp config/db)
 
 ## Backend (FastAPI, Python 3.12)
@@ -141,12 +147,16 @@ React/TS/Vite frontend, single server serving the built frontend.
   `local_host()` (`ACTIVITY_MONITOR_ORIGIN` or the OS hostname) unless the payload supplies one;
   dedup with the `dedup(*parts)` helper.
   `derive_task(...)` extracts a task key from the first candidate matching the `TASK_PATTERN` env
-  regex (git: commit subject, then branch; used by `GitHistorySource.parse`).
+  regex (git: commit subject, then branch; used by `GitHistorySource.parse`). Producers that cannot
+  attribute work (a git subject without a key falls back to the repo name; opencode before `/task`
+  and watcher `focus` events use the default `UNKNOWN_TASK`, `"Unknown"`) always send a task
+  instead of leaving it empty.
   Pull fetches run off the event loop (`asyncio.to_thread`) because `fetch()` is blocking.
 - **Ingest**: idempotent on `dedup_key` (external `id` or payload hash). New events are stored,
   duplicates ignored. `store_events` in `api.py` is the single write path. A top-level `host` in the
   payload is stored on the event (and removed from `data.raw`). A `task.set` event backs the
-  program's untagged events (`data.raw.program.id`/`host` match) with the new task, walking back to
+  program's untagged events (`data.raw.program.id`/`host` match; untagged = no task or the
+  producers' `Unknown` default) with the new task, walking back to
   the previous `task.set` (`_backfill_task`) — the `/task` command only pins later events, so this
   retroactively attributes work done before the id was set while leaving earlier task ranges alone.
 - **Programs / presence**: `POST /api/programs/start|beat|end` manage live programs. `beat` bumps
@@ -177,8 +187,9 @@ React/TS/Vite frontend, single server serving the built frontend.
   source. `_focus_spans` turns `focus` events into spans (a close carries `duration_ms` and ends at
   `timestamp`; a trailing open runs to the last `windows` event plus `stale_after_seconds` — the
   watcher's `heartbeat` keeps it live, so a stopped watcher does not leave a multi-day "active"
-  bar), grouping them into one lane per process
-  (`task`). `_pair_intervals` pairs `idle.start`/`idle.end` and `lock`/`unlock` into intervals;
+  bar), grouping them into one lane per `task` (usually a single `Unknown` lane unless
+  `ACTIVITY_MONITOR_TASK` pins the watcher to one). `_pair_intervals` pairs `idle.start`/`idle.end`
+  and `lock`/`unlock` into intervals;
   both are clamped to the query range and their open pair is clipped the same way.
 - **Code timeline**: `GET /api/timelines/code` returns the `git` source's `commit`/`push` events in
   range; the frontend draws them as one passive `Code` row that is always `closed` (no active/idle

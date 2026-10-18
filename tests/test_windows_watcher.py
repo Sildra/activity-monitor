@@ -10,6 +10,8 @@ from typing import Any, Self
 
 import pytest
 
+from activity_monitor.process_config import parse_process_config
+
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows-only watcher")
 
 BASE = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
@@ -21,12 +23,12 @@ def load_watcher_module() -> Any:
     return windows_watcher
 
 
-def make_watcher(events: list[dict[str, Any]]) -> Any:
+def make_watcher(events: list[dict[str, Any]], **kwargs: Any) -> Any:
     windows_watcher = load_watcher_module()
     sink: Callable[[dict[str, Any]], bool] = lambda payload: events.append(payload) or True
 
     # A large heartbeat keeps unrelated tests free of liveness pings.
-    return windows_watcher.WindowsWatcher(sink, skew_seconds=30.0, heartbeat=10_000.0)
+    return windows_watcher.WindowsWatcher(sink, skew_seconds=30.0, heartbeat=10_000.0, **kwargs)
 
 
 def kinds(events: list[dict[str, Any]]) -> list[str]:
@@ -229,7 +231,7 @@ def test_task_env_sets_focus_task(monkeypatch: pytest.MonkeyPatch) -> None:
     assert [event["task"] for event in focus] == ["JIRA-123"]
 
 
-def test_focus_task_defaults_to_process(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_focus_task_defaults_to_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ACTIVITY_MONITOR_TASK", raising=False)
     events: list[dict[str, Any]] = []
     watcher = make_watcher(events)
@@ -238,7 +240,29 @@ def test_focus_task_defaults_to_process(monkeypatch: pytest.MonkeyPatch) -> None
     watcher.tick(BASE)
 
     focus = [event for event in events if event["kind"] == "focus"]
-    assert [event["task"] for event in focus] == ["code.exe"]
+    # A task is a unit of work, never a process: focus reports the default task
+    # and keeps the foreground process as event data instead.
+    assert [event["task"] for event in focus] == ["Unknown"]
+    assert [event["process"] for event in focus] == ["code.exe"]
+
+
+def test_process_config_rewrites_focus_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The blanket fallback task is set to prove a configured task wins over it.
+    monkeypatch.setenv("ACTIVITY_MONITOR_TASK", "JIRA-9")
+    rules = parse_process_config(
+        {"process": {"input": {"name": "code"}, "output": {"name": "[redacted]", "title": "editor", "task": "ide"}}},
+        source="test",
+    )
+    events: list[dict[str, Any]] = []
+    watcher = make_watcher(events, process_rules=rules)
+    FakeDesktop(monkeypatch, load_watcher_module())
+
+    watcher.tick(BASE)
+
+    focus = [event for event in events if event["kind"] == "focus"]
+    assert [(event["task"], event["process"], event["title"]) for event in focus] == [("ide", "[redacted]", "editor")]
+    # The rewritten name also takes over detail so the image path cannot leak it.
+    assert focus[0]["detail"] == "[redacted]"
 
 
 # -- event actor --------------------------------------------------------------

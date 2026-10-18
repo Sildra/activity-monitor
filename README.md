@@ -205,7 +205,8 @@ same variables and support HTTPS + mTLS + basic auth (see `plugins/README.md`):
 | `ACTIVITY_MONITOR_USERNAME` | HTTP Basic auth username |
 | `ACTIVITY_MONITOR_PASSWORD` | HTTP Basic auth password |
 | `ACTIVITY_MONITOR_ORIGIN` | Origin `host` sent with every event (default: the machine hostname) |
-| `ACTIVITY_MONITOR_TASK` | Windows watcher: task stamped on desktop `focus` events (default: the process) |
+| `ACTIVITY_MONITOR_TASK` | Windows watcher: task stamped on desktop `focus` events (default: `Unknown` — a task is a unit of work, not a process; the foreground process is stored in the event's data) |
+| `ACTIVITY_MONITOR_PROCESS_CONFIG` | Windows watcher: path to a YAML file of input/output couples to rename, redact and extract tasks from focus windows (overrides `--process-config`) |
 | `ACTIVITY_MONITOR_DISPLAY_USER` | Event `actor` sent by every client (default: `user` / `$USER` / `$USERNAME` / git author) |
 
 ```powershell
@@ -235,8 +236,8 @@ The clients apply these directly:
 For a browser-only session (no client cert), simply trust `certs/ca.crt`.
 
 The opencode plugins also support a silent mode: `ACTIVITY_MONITOR_SHADOW=1` sends nothing to
-the monitor, and `/shadow <prompt>` skips reporting for a single prompt (see
-`plugins/README.md`).
+the monitor, `/shadow <prompt>` skips reporting for a single prompt, and a bare `/shadow`
+toggles a permanent per-session shadow (see `plugins/README.md`).
 
 **Security note:** The `certs/` directory contains private keys. Do not commit private
 keys to version control. The example above uses `certs/` which is gitignored in typical

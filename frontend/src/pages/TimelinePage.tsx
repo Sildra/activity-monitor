@@ -155,7 +155,6 @@ export default function TimelinePage() {
                 start: span.start,
                 end: span.end,
                 title: span.title,
-                process: lane.process,
             })),
         ),
         idle: user?.idle ?? [],

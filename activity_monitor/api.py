@@ -7,7 +7,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from sqlalchemy import distinct, func, select, update
+from sqlalchemy import distinct, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from activity_monitor.db import get_session
@@ -34,7 +34,7 @@ from activity_monitor.models import (
     UserTimeline,
     as_utc,
 )
-from activity_monitor.sources import SourceProvider
+from activity_monitor.sources import UNKNOWN_TASK, SourceProvider
 
 router = APIRouter(prefix="/api")
 
@@ -87,9 +87,10 @@ async def _backfill_task(session: AsyncSession, program_id: str, host: str, task
     """Retroactively tag a program's earlier untagged work after a ``task.set``.
 
     A ``/task`` command only pins the events that follow it (the plugin tags them as
-    they happen), so work done before the task was set stays untagged. This walks the
-    same program's events back from ``at`` and stamps them with ``task``, stopping at
-    the previous ``task.set`` so an earlier task range is left intact.
+    they happen), so work done before the task was set keeps the producer's default
+    (``UNKNOWN_TASK``, or nothing at all for older producers). This walks the same
+    program's events back from ``at`` and stamps them with ``task``, stopping at the
+    previous ``task.set`` so an earlier task range is left intact.
     """
     program = func.json_extract(ActivityEvent.data, "$.raw.program.id")
     program_host = func.json_extract(ActivityEvent.data, "$.raw.program.host")
@@ -111,7 +112,7 @@ async def _backfill_task(session: AsyncSession, program_id: str, host: str, task
             program == program_id,
             program_host == host,
             ActivityEvent.kind != _TASK_SET_KIND,
-            ActivityEvent.task.is_(None),
+            or_(ActivityEvent.task.is_(None), ActivityEvent.task == UNKNOWN_TASK),
             ActivityEvent.timestamp < at,
         )
         .values(task=task)
@@ -743,7 +744,7 @@ async def user_timeline(
     # stopped watcher does not leave a multi-day "active"/"idle"/"locked" bar.
     open_end = min(query_end, now, last_seen + stale)
 
-    by_process: dict[str, list[UserSpan]] = {}
+    by_task: dict[str, list[UserSpan]] = {}
     totals: dict[str, int] = {}
 
     for span_start, span_end, event in _focus_spans(events, open_end):
@@ -753,13 +754,15 @@ async def user_timeline(
             continue
 
         left, right = clamped
-        process = event.task or "unknown"
-        by_process.setdefault(process, []).append(UserSpan(start=left, end=right, title=event.title))
-        totals[process] = totals.get(process, 0) + int((right - left).total_seconds() * 1000)
+        # Lanes group by task: focus events report `ACTIVITY_MONITOR_TASK` or the
+        # default `Unknown` — a task is a unit of work, never a process.
+        task = event.task or UNKNOWN_TASK
+        by_task.setdefault(task, []).append(UserSpan(start=left, end=right, title=event.title))
+        totals[task] = totals.get(task, 0) + int((right - left).total_seconds() * 1000)
 
     lanes = [
-        UserLane(process=process, label=process, spans=sorted(spans, key=lambda span: span.start))
-        for process, spans in sorted(by_process.items(), key=lambda item: totals[item[0]], reverse=True)
+        UserLane(task=task, label=task, spans=sorted(spans, key=lambda span: span.start))
+        for task, spans in sorted(by_task.items(), key=lambda item: totals[item[0]], reverse=True)
     ]
 
     return UserTimeline(

@@ -73,6 +73,10 @@ def local_host() -> str:
     return os.environ.get("ACTIVITY_MONITOR_ORIGIN") or socket.gethostname()
 
 
+UNKNOWN_TASK = "Unknown"
+"""Default task stamped by producers on work they cannot attribute (no task pinned yet)."""
+
+
 def derive_task(*candidates: str | None) -> str | None:
     """Extract a task key (e.g. a Jira id) from the first candidate that matches.
 

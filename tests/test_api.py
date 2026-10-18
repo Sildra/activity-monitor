@@ -82,9 +82,12 @@ def test_task_set_backfills_program_work_until_previous_task(tmp_path: Path) -> 
         def task_of(title: str) -> str | None:
             return next(event["task"] for event in client.get("/api/tasks").json() if event["title"] == title)
 
-        # Work done before the first /task is untagged and only pinned afterwards.
+        # Work done before the first /task is untagged and only pinned afterwards;
+        # producers default it to "Unknown" (older ones left it empty) and both
+        # forms are backfilled.
         ingest("before", "prompt.begin", 10, title="before")
         ingest("before-2", "prompt.begin", 20, title="before-2")
+        ingest("before-3", "prompt.begin", 25, title="before-3", task="Unknown")
         ingest("ts1", "task.set", 30, task="AAA")
         ingest("under-a", "prompt.begin", 40, title="under-a", task="AAA")
         ingest("ts2", "task.set", 50, task="BBB")
@@ -92,17 +95,20 @@ def test_task_set_backfills_program_work_until_previous_task(tmp_path: Path) -> 
 
         assert task_of("before") == "AAA"
         assert task_of("before-2") == "AAA"
+        assert task_of("before-3") == "AAA"
         assert task_of("under-a") == "AAA"
         assert task_of("under-b") == "BBB"
 
         # A late, older untagged event arrives after the previous task.set, so the
         # next one backfills only its own range and leaves this one alone.
         ingest("late", "prompt.begin", 25, title="late")
+        ingest("late-unknown", "prompt.begin", 26, title="late-unknown", task="Unknown")
         ingest("fresh", "prompt.begin", 65, title="fresh")
         ingest("other", "prompt.begin", 25, title="other", program="p2")
         ingest("ts3", "task.set", 70, task="CCC")
 
         assert task_of("late") is None
+        assert task_of("late-unknown") == "Unknown"
         assert task_of("fresh") == "CCC"
         assert task_of("other") is None
 
@@ -746,7 +752,7 @@ def test_user_timeline_reports_focus_lanes_and_states(tmp_path: Path) -> None:
             "/api/timelines/user", params={"start": fmt(t0), "end": fmt(t0 + timedelta(minutes=30))}
         ).json()
 
-        lanes = {lane["process"]: lane for lane in body["lanes"]}
+        lanes = {lane["task"]: lane for lane in body["lanes"]}
         assert set(lanes) == {"code", "browser"}
         assert len(lanes["code"]["spans"]) == 1
         assert len(lanes["browser"]["spans"]) == 1

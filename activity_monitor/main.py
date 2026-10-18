@@ -81,6 +81,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         watcher_thread = None
 
         if config.watch_windows:
+            from activity_monitor.process_config import load_process_config
             from activity_monitor.windows_watcher import (
                 DEFAULT_HEARTBEAT_SECONDS,
                 DEFAULT_SKEW_SECONDS,
@@ -89,6 +90,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
             settings = config.source_settings("windows")
             provider = app.state.sources.get("windows") or PushSource("windows", {})
+            process_config = config.process_config or os.environ.get("ACTIVITY_MONITOR_PROCESS_CONFIG")
             watcher_stop, watcher_thread = start_database_watcher(
                 provider,
                 loop=asyncio.get_running_loop(),
@@ -98,6 +100,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                 heartbeat=float(settings.get("heartbeat_seconds", DEFAULT_HEARTBEAT_SECONDS)),
                 actor=settings.get("actor"),
                 verbose=bool(settings.get("verbose", False)),
+                process_rules=load_process_config(process_config) if process_config else (),
             )
 
         # The tray icon only exists with --tray (main() puts it on the app); it

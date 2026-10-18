@@ -152,7 +152,7 @@ class UserSpan(BaseModel):
 
 
 class UserLane(BaseModel):
-    process: str
+    task: str
     label: str
     spans: list[UserSpan] = []
 

@@ -155,28 +155,67 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     const sessionTasks = new Map<string, string>();
     const shadowSessions = new Set<string>();
     const shadowTurns = new Set<string>();
+    // Sessions toggled into a permanent shadow with a bare `/shadow`: nothing
+    // they produce is reported until the command is run again.
+    const shadowPermanent = new Set<string>();
     const permissionPending = new Map<string, PermissionPending>();
     const shadowAll = envShadow();
+
+    // A session in permanent shadow is skipped like one with a shadowed turn.
+    const sessionShadowed = (sessionID: string): boolean =>
+        shadowTurns.has(sessionID) || shadowPermanent.has(sessionID);
 
     let lastError = "";
     let connection: "pending" | "ok" | "error" = "pending";
     let publishedConnection = "";
 
+    // The SDK is called without `throwOnError`, so a rejected reply resolves as
+    // `{ error }` instead of rejecting — without this, a broken channel (wrong
+    // endpoint, auth, older client) silently left the indicator on "Connecting"
+    // forever. Surface each distinct failure once in the opencode log instead.
+    const warnings = new Set<string>();
+    const warnOnce = (message: string): void => {
+        if (warnings.has(message)) {
+            return;
+        }
+
+        warnings.add(message);
+        console.warn(`[activity-monitor] ${message}`);
+    };
+
+    const describeError = (error: unknown): string => {
+        try {
+            const text = typeof error === "string" ? error : (JSON.stringify(error) ?? String(error));
+
+            return text.length > 400 ? `${text.slice(0, 400)}…` : text;
+        } catch {
+            return String(error);
+        }
+    };
+
     // Mirror the connection state and the per-session task into the OpenCode TUI
     // (see tui.tsx). V1 has no RPC bridge between a plugin's server and TUI
     // halves, so they are handed over as namespaced commands on the one server ->
     // TUI channel the SDK exposes. Best effort: a headless server, or an older
-    // client without `tui.publish`, simply no-ops and the indicator stays idle.
+    // client without `tui.publish`, simply no-ops and the indicator stays idle
+    // (with the failure in the log when the endpoint answers with an error).
     //
     // The commands are ignored by the TUI core unless the event's directory
     // matches, and unknown commands dispatch nothing, so re-sending them is safe.
     const publishCommand = (command: string): void => {
         try {
-            void client.tui
-                .publish({ body: { type: "tui.command.execute", properties: { command } } })
-                .catch(() => undefined);
-        } catch {
-            // Older clients lack a TUI publisher; ignore.
+            void Promise.resolve(
+                client.tui.publish({ body: { type: "tui.command.execute", properties: { command } } }),
+            ).then(
+                (reply) => {
+                    if (reply && typeof reply === "object" && "error" in reply && reply.error !== undefined) {
+                        warnOnce(`tui publish rejected: ${describeError(reply.error)}`);
+                    }
+                },
+                (error: unknown) => warnOnce(`tui publish failed: ${describeError(error)}`),
+            );
+        } catch (error) {
+            warnOnce(`tui publish unavailable: ${describeError(error)}`);
         }
     };
 
@@ -189,11 +228,11 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     // The TUI half only subscribes once it loads, which is after this plugin has
     // already published its initial state, and a state that never changes is never
     // re-sent, so a late subscriber would sit on "Connecting" forever (and miss
-    // every task). `force` re-publishes the current state regardless (used on
-    // every heartbeat) and every pinned task rides along, so the indicator
-    // converges.
+    // every task). `force` re-publishes the current state regardless (used on the
+    // short sync timer and every heartbeat) and every pinned task rides along,
+    // so the indicator converges.
     const publishConnection = (force = false): void => {
-        const state = shadowAll ? "shadow" : connection;
+        const state = shadowAll || shadowPermanent.size > 0 ? "shadow" : connection;
 
         if (!force && state === publishedConnection) {
             return;
@@ -207,10 +246,18 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
         }
     };
 
+    // Must never throw synchronously: `toast` runs inside `post()`'s failure
+    // path, and an escaping throw would reject the caller — skipping the state
+    // publish below and the heartbeat's re-publish — leaving the indicator
+    // stuck. A headless/older client without `tui.showToast` no-ops (once).
     const toast = (message: string, variant: "info" | "warning" | "error"): void => {
-        void client.tui
-            .showToast({ body: { title: "Activity Monitor", message, variant, duration: 6000 } })
-            .catch(() => undefined);
+        try {
+            void Promise.resolve(
+                client.tui.showToast({ body: { title: "Activity Monitor", message, variant, duration: 6000 } }),
+            ).catch(() => undefined);
+        } catch (error) {
+            warnOnce(`tui toast unavailable: ${describeError(error)}`);
+        }
     };
 
     const report = (message: string): void => {
@@ -222,8 +269,13 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
         toast(message, "error");
     };
 
-    const sessionTask = (sessionID: string | undefined): string | undefined =>
-        sessionID !== undefined ? sessionTasks.get(sessionID) : undefined;
+    // Work with no pinned task is still reported — under the default task
+    // "Unknown" — so every work event carries one, and the backend backfills
+    // these when a task is pinned later. The sidebar pin (the published
+    // `activity-monitor:task:` command) is separate and stays empty until the
+    // session actually pins one.
+    const sessionTask = (sessionID: string | undefined): string =>
+        (sessionID !== undefined ? sessionTasks.get(sessionID) : undefined) ?? "Unknown";
 
     // `on_status` hands the HTTP status of a rejected reply back to the caller so
     // it can tell a meaningful answer (404 = the backend has no such program) from
@@ -296,6 +348,7 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     };
 
     let interval: ReturnType<typeof setInterval> | undefined;
+    let syncInterval: ReturnType<typeof setInterval> | undefined;
 
     const programEvents = (): { id: string; source: string; host: string } => ({ id: programId, source, host });
 
@@ -305,9 +358,22 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
     // settles before the first beat.
     publishConnection();
 
+    // The heartbeat carries presence to the Activity Monitor; its re-publish is
+    // only a fallback. `catch` first so a rejected beat can never skip it (a
+    // synchronously-throwing toast used to do exactly that) or go unhandled.
     interval = setInterval(() => {
-        void beat().then(() => publishConnection(true));
+        void beat()
+            .catch(() => undefined)
+            .finally(() => publishConnection(true));
     }, opts.heartbeatMs ?? 60_000);
+
+    // The heartbeat is bound to the presence cadence (60s) — far too slow on its
+    // own: the TUI half subscribes after this plugin's first publish and may
+    // (re)subscribe at any moment (a fresh TUI against a long-lived server, a
+    // plugin reload), only ever seeing the NEXT command. Mirror the state on a
+    // short timer of its own so the indicator settles within seconds instead of
+    // sitting on "Connecting" until the next beat.
+    syncInterval = setInterval(() => publishConnection(true), 5_000);
 
     return {
         "command.execute.before": async (input) => {
@@ -316,6 +382,9 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
             // /shadow <prompt>: run the prompt but mark the session so chat.message
             // skips reporting for that turn (a per-turn ACTIVITY_MONITOR_SHADOW).
             // Unlike /task this does not throw, so the command proceeds normally.
+            // A bare /shadow submits no prompt: it toggles a permanent shadow for the
+            // session, so every later prompt and permission in it goes unreported
+            // until /shadow is run again.
             if (command === "shadow") {
                 if (input.arguments.trim()) {
                     shadowSessions.add(input.sessionID);
@@ -324,9 +393,21 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
                     // later prompt in this session is not silently shadowed.
                     const cleanup = setTimeout(() => shadowSessions.delete(input.sessionID), 30_000);
                     cleanup.unref?.();
+
+                    return;
                 }
 
-                return;
+                if (shadowPermanent.has(input.sessionID)) {
+                    shadowPermanent.delete(input.sessionID);
+                } else {
+                    shadowPermanent.add(input.sessionID);
+                }
+
+                publishConnection();
+
+                // As with /task, throwing aborts the command so no prompt (and no model
+                // turn) is sent for the bare /shadow. The TUI ignores the abort.
+                throw new Error("activity-monitor: shadow command handled");
             }
 
             if (command !== "task") {
@@ -380,7 +461,8 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
                 return;
             }
 
-            const turnShadowed = shadowSessions.delete(input.sessionID) || prefixPart !== undefined;
+            const turnShadowed =
+                shadowSessions.delete(input.sessionID) || prefixPart !== undefined || shadowPermanent.has(input.sessionID);
 
             if (turnShadowed) {
                 shadowTurns.add(input.sessionID);
@@ -435,7 +517,7 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
                     action: permission.type,
                 });
 
-                if (shadowTurns.has(permission.sessionID)) {
+                if (sessionShadowed(permission.sessionID)) {
                     return;
                 }
 
@@ -468,7 +550,7 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
 
                 permissionPending.delete(permissionID);
 
-                if (shadowTurns.has(sessionID)) {
+                if (sessionShadowed(sessionID)) {
                     return;
                 }
 
@@ -542,6 +624,10 @@ export const OpenCodeActivity: Plugin = async ({ directory, client }, options) =
         dispose: async () => {
             if (interval !== undefined) {
                 clearInterval(interval);
+            }
+
+            if (syncInterval !== undefined) {
+                clearInterval(syncInterval);
             }
 
             await post("/api/programs/end", { program_id: programId }, 3);
