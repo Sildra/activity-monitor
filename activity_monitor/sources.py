@@ -141,6 +141,10 @@ class SourceProvider(ABC):
     def __init__(self, name: str, settings: dict[str, Any]):
         self.name = name
         self.settings = settings
+        # Latest liveness ping (`heartbeat` record) seen from this source. Pings
+        # are not persisted as events (see `api.store_events`); they only tell
+        # the user timeline that a watcher is still reporting.
+        self.last_heartbeat: datetime | None = None
 
     @property
     def actor(self) -> str:

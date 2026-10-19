@@ -9,9 +9,10 @@ Events reported (source must be configured as a Push source, e.g. name `windows`
 
 - `focus`      - foreground window became active (open span); each change closes
                  the previous span carrying its `duration_ms`.
-- `heartbeat`  - emitted every `heartbeat_seconds` while the watcher runs, so the
-                 server can tell the watcher is alive (and clip a span whose
-                 watcher went away).
+- `heartbeat`  - emitted every `heartbeat_seconds` while the watcher runs so the
+                 server can tell the watcher is alive. Pings are not stored as
+                 events: the server keeps only the latest one in memory and clips
+                 any span left open once the pings stop.
 - `idle.start` - no keyboard/mouse input for `idle_minutes`; timestamp is the
                  actual moment input stopped.
 - `idle.end`   - input resumed; `duration_ms` is the idle span length.
@@ -524,8 +525,8 @@ class WindowsWatcher:
         An open focus/idle/lock span carries no closing event until the state
         changes, so without a ping a watcher that stopped (or a machine that was
         turned off) would leave the span looking live forever. The server clips
-        such spans a staleness window after the last event, so the ping keeps
-        them alive only while the watcher is actually running.
+        such spans a staleness window after the last ping (pings are never
+        stored), so they stay alive only while the watcher is actually running.
         """
         if self._last_beat is None:
             self._last_beat = now
@@ -703,7 +704,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--heartbeat-seconds",
         type=float,
         default=DEFAULT_HEARTBEAT_SECONDS,
-        help="emit a liveness heartbeat this often so the server knows the watcher is still running",
+        help="emit a liveness ping this often so the server knows the watcher is still running "
+        "(pings are kept in memory, never stored as events)",
     )
     parser.add_argument(
         "--process-config",

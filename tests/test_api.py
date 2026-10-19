@@ -811,6 +811,28 @@ def test_user_timeline_open_span_stays_live_with_recent_events(tmp_path: Path) -
         # all the way to it.
         assert datetime.fromisoformat(spans[0]["end"]) == end
 
+        # Pings are liveness only: the heartbeat is not recorded as an event.
+        assert "heartbeat" not in client.get("/api/kinds").json()
+        assert client.get("/api/stats").json()["events"] == 1
+
+
+def test_windows_heartbeats_are_not_stored(tmp_path: Path) -> None:
+    with make_client(tmp_path, WINDOWS_SOURCE) as client:
+        t0 = datetime(2026, 10, 1, 9, 0, 0, tzinfo=UTC)
+        fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
+
+        for index in range(3):
+            response = client.post(
+                "/api/ingest/windows",
+                json={"id": str(index), "kind": "heartbeat", "timestamp": fmt(t0 + timedelta(minutes=index))},
+            )
+
+            assert response.status_code == 200
+            assert response.json() == {"accepted": 0}
+
+        assert client.get("/api/stats").json() == {"events": 0, "sources": 0, "actors": 0, "tasks": 0}
+        assert client.get("/api/kinds").json() == []
+
 
 def test_tasks_merges_windows_focus_spans(tmp_path: Path) -> None:
     with make_client(tmp_path, WINDOWS_SOURCE) as client:

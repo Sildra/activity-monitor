@@ -81,6 +81,10 @@ def _provider(request: Request, name: str) -> SourceProvider:
 
 
 _TASK_SET_KIND = "task.set"
+# A `heartbeat` is a liveness ping, not an activity event: it is never stored
+# (see `store_events`) and only feeds the open-span staleness check in the user
+# timeline. Legacy rows are still read for that check.
+_HEARTBEAT_KIND = "heartbeat"
 
 
 async def _backfill_task(session: AsyncSession, program_id: str, host: str, task: str, at: datetime) -> None:
@@ -130,6 +134,14 @@ async def store_events(session: AsyncSession, provider: SourceProvider, raws: li
 
     for raw in raws:
         canonical = provider.parse(raw)
+
+        if canonical["kind"] == _HEARTBEAT_KIND:
+            # Liveness pings are frequent and carry nothing to show, so they are
+            # not written to the database; only the latest one is remembered on
+            # the provider so `user_timeline` can tell the watcher is alive.
+            provider.last_heartbeat = canonical["timestamp"]
+            continue
+
         existing = (
             await session.execute(select(ActivityEvent).where(ActivityEvent.dedup_key == canonical["dedup_key"]))
         ).scalar_one_or_none()
@@ -620,7 +632,8 @@ async def presence_timeline(
 
 
 _USER_SOURCE = "windows"
-_HEARTBEAT_KIND = "heartbeat"
+# `_HEARTBEAT_KIND` is only listed for legacy rows written before pings stopped
+# being stored; new pings never reach the events table.
 _USER_KINDS = ("focus", "idle.start", "idle.end", "lock", "unlock", _HEARTBEAT_KIND)
 
 
@@ -738,10 +751,19 @@ async def user_timeline(
     )
 
     stale = _stale_after(request)
-    last_seen = as_utc(events[-1].timestamp) if events else now
     # A span that is still open (no closing event) is only trusted while the
-    # watcher keeps reporting; clip it near the last event we actually saw so a
+    # watcher keeps reporting; clip it near the last thing we heard from it so a
     # stopped watcher does not leave a multi-day "active"/"idle"/"locked" bar.
+    # Heartbeats are not stored, so the latest in-memory ping stands in for the
+    # events a running watcher would otherwise keep emitting.
+    provider = request.app.state.sources.get(_USER_SOURCE)
+    seen = [as_utc(events[-1].timestamp)] if events else []
+    last_ping = provider.last_heartbeat if provider is not None else None
+
+    if last_ping is not None:
+        seen.append(last_ping)
+
+    last_seen = max(seen) if seen else now
     open_end = min(query_end, now, last_seen + stale)
 
     by_task: dict[str, list[UserSpan]] = {}
