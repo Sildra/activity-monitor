@@ -100,8 +100,9 @@ React/TS/Vite frontend, single server serving the built frontend.
   it POSTs to `/api/ingest/windows`; embedded (`--watch-windows` / `general.watch_windows`) the backend
   starts it in-process and it writes straight to the DB via `store_events`. While it runs it also
   emits a `heartbeat` every `heartbeat_seconds` (default 60) so the server can tell the watcher is
-  alive; an open `focus`/`idle`/`lock` span is only trusted while events keep arriving (see User
-  timeline). The standalone
+  alive; pings are liveness only and never stored (`store_events` keeps just the latest on the
+  source provider), and an open `focus`/`idle`/`lock` span is only trusted while the watcher keeps
+  reporting (see User timeline). The standalone
   watcher also takes flags mirroring every client variable (`--base-url`, `--source`, `--actor`,
   `--host`, `--task`, `--process-config`, `--username`, `--password`, `--ca-cert`, `--client-cert`,
   `--client-key`, `--insecure`) plus `--poll`/`--idle-minutes`/`--skew-seconds`/`--heartbeat-seconds`;
@@ -153,7 +154,9 @@ React/TS/Vite frontend, single server serving the built frontend.
   instead of leaving it empty.
   Pull fetches run off the event loop (`asyncio.to_thread`) because `fetch()` is blocking.
 - **Ingest**: idempotent on `dedup_key` (external `id` or payload hash). New events are stored,
-  duplicates ignored. `store_events` in `api.py` is the single write path. A top-level `host` in the
+  duplicates ignored. `store_events` in `api.py` is the single write path — except `heartbeat`
+  records, which are liveness pings: they are never stored (the latest is kept on the source
+  provider for the user timeline's staleness check). A top-level `host` in the
   payload is stored on the event (and removed from `data.raw`). A `task.set` event backs the
   program's untagged events (`data.raw.program.id`/`host` match; untagged = no task or the
   producers' `Unknown` default) with the new task, walking back to
@@ -185,8 +188,10 @@ React/TS/Vite frontend, single server serving the built frontend.
   the dead time is not counted as presence. Idempotent; returns `{removed, trimmed, split}`.
 - **User timeline**: `GET /api/timelines/user` reconstructs desktop activity from the `windows`
   source. `_focus_spans` turns `focus` events into spans (a close carries `duration_ms` and ends at
-  `timestamp`; a trailing open runs to the last `windows` event plus `stale_after_seconds` — the
-  watcher's `heartbeat` keeps it live, so a stopped watcher does not leave a multi-day "active"
+  `timestamp`; a trailing open runs to the last thing heard from the watcher — its last stored
+  event or the latest in-memory `heartbeat` ping — plus `stale_after_seconds` (heartbeats are not
+  stored, so a ping keeps it live across long stretches without state changes while a stopped
+  watcher does not leave a multi-day "active"
   bar), grouping them into one lane per `task` (usually a single `Unknown` lane unless
   `ACTIVITY_MONITOR_TASK` pins the watcher to one). `_pair_intervals` pairs `idle.start`/`idle.end`
   and `lock`/`unlock` into intervals;
@@ -199,8 +204,10 @@ React/TS/Vite frontend, single server serving the built frontend.
 ## Frontend (Vite + React 19 + TS + MUI)
 
 - **Pages**: `TimelinePage` (date range -> one `UnifiedTimeline` merging the `User` row with
-  `Agent N` lanes; a `Consolidate` button + idle-hours field calls
-  `POST /api/programs/consolidate` and reloads), `TaskPage` (the "Events" tab — search + filters +
+  `Agent N` lanes; an `Active task` select filters the timeline to one task — pinning the range to
+  that task's first/last activity and shadowing everything else; a `Consolidate` button calls
+  `POST /api/programs/consolidate` (server-default idle gap), reloads, and reports the result in a
+  `Snackbar`), `TaskPage` (the "Events" tab — search + filters +
   task list -> `Timeline` + event list; tasks are grouping keys, e.g. a Jira id), `SourcesPage`
   (list + fetch + ingest example). `App.tsx` is a MUI `Tabs` shell; page selected by `?page=`.
 - **Timeline**: `src/components/Timeline.tsx` renders lanes as responsive HTML (percentage

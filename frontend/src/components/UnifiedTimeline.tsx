@@ -36,6 +36,7 @@ export interface UserSpan {
     start: string;
     end: string;
     title?: string | null;
+    task?: string | null;
 }
 
 export interface UserInterval {
