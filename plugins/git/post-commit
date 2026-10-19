@@ -3,10 +3,14 @@
 # post-commit - report a new commit to the Activity Monitor.
 #
 # The monitor tracks commit actions by registering (at least) the current
-# branch and the commit id, plus the repository, author and subject. The
-# timestamp is the moment the commit is recorded (not the commit's own git
-# date), so an --amend — which preserves the author date — still gets a fresh
-# time instead of collapsing onto the original commit.
+# branch and the commit id, plus the repository, author, subject and the
+# commit's diff summary (`git show --stat`). The timestamp is the moment the
+# commit is recorded (not the commit's own git date), so an --amend — which
+# preserves the author date — still gets a fresh time instead of collapsing
+# onto the original commit. A commit replayed by a rebase is reported too (it
+# is a new commit with a new id), flagged `replayed: true` and carrying the
+# branch from the rebase state — HEAD is detached while the rebase runs.
+# post-rewrite records the rebase itself as its own event.
 #
 # Install, from the repository you want to watch:
 #   git config core.hooksPath /absolute/path/to/activity_monitor/plugins/git
@@ -27,6 +31,20 @@ commit=$(git rev-parse HEAD 2>/dev/null) || exit 0
 branch=$(git branch --show-current 2>/dev/null)
 [ -n "$branch" ] || branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 [ "$branch" = "HEAD" ] && branch=""
+gitdir=$(git rev-parse --git-dir 2>/dev/null)
+
+# Mid-rebase HEAD is detached, so this commit is a replay rather than a fresh
+# one: say so, and take the branch from the rebase state, which still names it.
+replayed=""
+if [ -n "$gitdir" ] && { [ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ]; }; then
+    replayed=rebase
+
+    if [ -z "$branch" ]; then
+        name=$(cat "$gitdir/rebase-merge/head-name" 2>/dev/null)
+        [ -n "$name" ] || name=$(cat "$gitdir/rebase-apply/head-name" 2>/dev/null)
+        branch=${name#refs/heads/}
+    fi
+fi
 
 repo=$(git rev-parse --show-toplevel 2>/dev/null)
 author=$(git log -1 --pretty=%an 2>/dev/null)
@@ -35,6 +53,12 @@ timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 message=$(git log -1 --pretty=%s 2>/dev/null)
 host="${ACTIVITY_MONITOR_ORIGIN:-$(hostname 2>/dev/null)}"
 actor="${ACTIVITY_MONITOR_DISPLAY_USER:-$author}"
+[ -n "$replayed" ] && replayed_json=true || replayed_json=false
+# The commit's diff summary (`git show --stat`): per-file lines then
+# `N files changed, X insertions(+), Y deletions(-)`. Widths are generous so
+# long paths survive, and the file count is capped so a huge commit stays
+# bounded. Empty for a merge commit, which has no stat of its own.
+stat=$(git show --stat=300,160,100 --format= HEAD 2>/dev/null | tr -d '\t')
 
 json_escape() {
     printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n'
@@ -44,7 +68,15 @@ json_field() {
     printf '"%s"' "$(json_escape "$1")"
 }
 
-payload=$(printf '{"repository":%s,"host":%s,"actor":%s,"commit":%s,"branch":%s,"author":%s,"email":%s,"timestamp":%s,"message":%s}' \
+# The stat block spans lines: escape each one, then join with a literal \n so
+# the JSON string stays valid (json_escape strips newlines, which would glue
+# the lines together).
+json_text() {
+    body=$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'NR>1 {printf "\\n"} {printf "%s", $0}')
+    printf '"%s"' "$body"
+}
+
+payload=$(printf '{"repository":%s,"host":%s,"actor":%s,"commit":%s,"branch":%s,"author":%s,"email":%s,"timestamp":%s,"message":%s,"stat":%s,"replayed":%s}' \
     "$(json_field "$repo")" \
     "$(json_field "$host")" \
     "$(json_field "$actor")" \
@@ -53,7 +85,9 @@ payload=$(printf '{"repository":%s,"host":%s,"actor":%s,"commit":%s,"branch":%s,
     "$(json_field "$author")" \
     "$(json_field "$email")" \
     "$(json_field "$timestamp")" \
-    "$(json_field "$message")")
+    "$(json_field "$message")" \
+    "$(json_text "$stat")" \
+    "$replayed_json")
 
 CURL_OPTS=""
 if [ -n "${ACTIVITY_MONITOR_CLIENT_CERT:-}" ] && [ -n "${ACTIVITY_MONITOR_CLIENT_KEY:-}" ]; then

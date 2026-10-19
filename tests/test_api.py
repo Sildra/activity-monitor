@@ -169,6 +169,140 @@ def test_git_actor_override_keeps_author(tmp_path: Path) -> None:
         assert event["data"]["author"] == "Jane"
 
 
+def test_git_commit_stat_is_summarized(tmp_path: Path) -> None:
+    with make_client(tmp_path, GIT_SOURCE) as client:
+        stat = (
+            " activity_monitor/api.py | 12 ++++++------\n"
+            " docs/logo.png            | Bin 1024 -> 2048 bytes\n"
+            " 2 files changed, 10 insertions(+), 6 deletions(-)\n"
+        )
+
+        assert client.post(
+            "/api/ingest/git",
+            json={
+                "kind": "commit",
+                "repository": "/repo",
+                "commit": "abc123",
+                "message": "tidy",
+                "stat": stat,
+                "author": "Jane",
+                "timestamp": "2026-01-01T00:00:00Z",
+            },
+        ).json() == {"accepted": 1}
+
+        # Without a summary the commit keeps the plain message and no stat keys.
+        assert client.post(
+            "/api/ingest/git",
+            json={
+                "kind": "commit",
+                "repository": "/repo",
+                "commit": "def456",
+                "message": "hi",
+                "author": "Jane",
+                "timestamp": "2026-01-01T00:01:00Z",
+            },
+        ).json() == {"accepted": 1}
+
+        events = {
+            event["data"]["commit"]: event for event in client.get("/api/tasks", params={"kind": "commit"}).json()
+        }
+
+        assert events["abc123"]["detail"] == "tidy · 2 files, +10/-6"
+        assert events["abc123"]["data"]["files"] == ["activity_monitor/api.py", "docs/logo.png"]
+        assert events["abc123"]["data"]["insertions"] == 10
+        assert events["abc123"]["data"]["deletions"] == 6
+        assert "2 files changed" in events["abc123"]["data"]["stat"]
+
+        assert events["def456"]["detail"] == "hi"
+        assert "stat" not in events["def456"]["data"]
+
+
+def test_git_rebase_and_amend_are_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TASK_PATTERN", r"JIRA-[0-9]+")
+
+    with make_client(tmp_path, GIT_SOURCE) as client:
+        assert client.post(
+            "/api/ingest/git",
+            json={
+                "kind": "rebase",
+                "repository": "/repo",
+                "branch": "feature/JIRA-42",
+                "commit": "new1",
+                "previous": "old1",
+                "onto": "base1",
+                "rewritten": {"count": 2, "pairs": [["old1", "new1"], ["old2", "new2"]]},
+                "actor": "Jane",
+                "timestamp": "2026-01-01T00:00:00Z",
+            },
+        ).json() == {"accepted": 1}
+
+        # An amend is the same shape with one rewritten commit.
+        assert client.post(
+            "/api/ingest/git",
+            json={
+                "kind": "amend",
+                "repository": "/repo",
+                "branch": "feature/JIRA-42",
+                "commit": "new2",
+                "previous": "old2",
+                "rewritten": {"count": 1, "pairs": [["old2", "new2"]]},
+                "actor": "Jane",
+                "timestamp": "2026-01-01T00:01:00Z",
+            },
+        ).json() == {"accepted": 1}
+
+        # Re-sending the same rewrite dedupes on the head it produced.
+        repeat = {
+            "kind": "rebase",
+            "repository": "/repo",
+            "branch": "feature/JIRA-42",
+            "commit": "new1",
+            "previous": "old1",
+            "onto": "base1",
+            "rewritten": {"count": 2, "pairs": [["old1", "new1"], ["old2", "new2"]]},
+            "actor": "Jane",
+            "timestamp": "2026-01-01T00:02:00Z",
+        }
+        assert client.post("/api/ingest/git", json=repeat).json() == {"accepted": 0}
+
+        events = {event["kind"]: event for event in client.get("/api/tasks").json()}
+
+        assert set(events) == {"rebase", "amend"}
+
+        rebase = events["rebase"]
+        assert rebase["title"] == "rebase feature/JIRA-42"
+        assert rebase["detail"] == "rebase feature/JIRA-42 · 2 commits"
+        assert rebase["data"]["previous"] == "old1"
+        assert rebase["data"]["onto"] == "base1"
+        assert rebase["data"]["rewritten"] == {"count": 2, "pairs": [["old1", "new1"], ["old2", "new2"]]}
+        assert rebase["task"] == "JIRA-42"
+
+        amend = events["amend"]
+        assert amend["title"] == "amend feature/JIRA-42"
+        assert amend["detail"] == "amend feature/JIRA-42 · 1 commit"
+        assert amend["data"]["onto"] is None
+
+
+def test_git_replayed_commit_keeps_its_flag(tmp_path: Path) -> None:
+    with make_client(tmp_path, GIT_SOURCE) as client:
+        assert client.post(
+            "/api/ingest/git",
+            json={
+                "kind": "commit",
+                "repository": "/repo",
+                "commit": "new9",
+                "branch": "feature/x",
+                "message": "cherry-picked work",
+                "replayed": True,
+                "actor": "Jane",
+                "timestamp": "2026-01-01T00:00:00Z",
+            },
+        ).json() == {"accepted": 1}
+
+        event = client.get("/api/tasks", params={"kind": "commit"}).json()[0]
+        assert event["data"]["replayed"] is True
+
+
 def test_git_task_derived_from_pattern(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TASK_PATTERN", r"JIRA-[0-9]+")
 
@@ -412,7 +546,7 @@ def test_consolidate_removes_empty_trims_and_splits_idle(tmp_path: Path) -> None
         event("prompt.end", t0 + timedelta(hours=2, minutes=20))
 
         result = client.post("/api/programs/consolidate", params={"idle_seconds": 3600}).json()
-        assert result == {"removed": 1, "trimmed": 1, "split": 1}
+        assert result == {"removed": 1, "trimmed": 1, "split": 1, "dropped_focus_opens": 0}
 
         conn = sqlite3.connect(db_path)
         rows = conn.execute("select program_id, started_at, ended_at from program order by started_at").fetchall()
@@ -438,6 +572,82 @@ def test_consolidate_removes_empty_trims_and_splits_idle(tmp_path: Path) -> None
             "removed": 0,
             "trimmed": 0,
             "split": 0,
+            "dropped_focus_opens": 0,
+        }
+
+
+def test_consolidate_drops_matched_focus_opens(tmp_path: Path) -> None:
+    with make_client(tmp_path, WINDOWS_SOURCE) as client:
+        db_path = tmp_path / "activity.db"
+        t0 = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
+        fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
+
+        def send(payload: dict) -> None:
+            assert client.post("/api/ingest/windows", json=payload).status_code == 200
+
+        def focus_rows() -> list[tuple[str, int | None]]:
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute(
+                "select title, duration_ms from activityevent where kind = 'focus' order by id"
+            ).fetchall()
+            conn.close()
+            return rows
+
+        # One finished span (open + close) and one span still open at the end.
+        send({"id": "1", "kind": "focus", "task": "code", "title": "editor", "timestamp": fmt(t0)})
+        send(
+            {
+                "id": "2",
+                "kind": "focus",
+                "task": "code",
+                "title": "editor",
+                "timestamp": fmt(t0 + timedelta(minutes=10)),
+                "duration_ms": 600_000,
+            }
+        )
+        send(
+            {
+                "id": "3",
+                "kind": "focus",
+                "task": "browser",
+                "title": "docs",
+                "timestamp": fmt(t0 + timedelta(minutes=10)),
+            }
+        )
+
+        assert [row[0] for row in focus_rows()] == ["editor", "editor", "docs"]
+
+        result = client.post("/api/programs/consolidate").json()
+        assert result == {"removed": 0, "trimmed": 0, "split": 0, "dropped_focus_opens": 1}
+
+        # The close survives for the finished span; the live trailing open does too.
+        assert focus_rows() == [("editor", 600_000), ("docs", None)]
+
+        # The user timeline still draws both spans.
+        body = client.get(
+            "/api/timelines/user", params={"start": fmt(t0), "end": fmt(t0 + timedelta(minutes=30))}
+        ).json()
+        lanes = {lane["task"]: lane for lane in body["lanes"]}
+
+        assert len(lanes["code"]["spans"]) == 1
+        assert datetime.fromisoformat(lanes["code"]["spans"][0]["start"]) == t0
+        assert datetime.fromisoformat(lanes["code"]["spans"][0]["end"]) == t0 + timedelta(minutes=10)
+        assert len(lanes["browser"]["spans"]) == 1
+
+        # The event list still dates the span at its start, from the close alone.
+        events = client.get("/api/tasks").json()
+        live, span = events
+        assert live["duration_ms"] is None
+        assert datetime.fromisoformat(live["timestamp"]) == t0 + timedelta(minutes=10)
+        assert span["duration_ms"] == 600_000
+        assert datetime.fromisoformat(span["timestamp"]) == t0
+
+        # Consolidating again has nothing left to match.
+        assert client.post("/api/programs/consolidate").json() == {
+            "removed": 0,
+            "trimmed": 0,
+            "split": 0,
+            "dropped_focus_opens": 0,
         }
 
 

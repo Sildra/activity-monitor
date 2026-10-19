@@ -23,7 +23,7 @@ import subprocess
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from activity_monitor.config import AppConfig
 
@@ -103,6 +103,67 @@ def derive_task(*candidates: str | None) -> str | None:
                 return match.group(0)
 
     return None
+
+
+_STAT_LIMIT = 8000
+"""Stored size cap for a `git show --stat` block (a commit touching hundreds of files)."""
+
+_STAT_FILE = re.compile(r"^\s*(.+?)\s+\|\s+(?:Bin |[0-9 +-]+$)")
+_STAT_CHANGED = re.compile(r"^\s*(\d+) files? changed")
+_STAT_INSERTIONS = re.compile(r"(\d+) insertions?\(\+\)")
+_STAT_DELETIONS = re.compile(r"(\d+) deletions?\(\-\)")
+
+_REWRITE_KINDS = ("rebase", "amend")
+"""History-rewriting operations reported by the `post-rewrite` git hook."""
+
+
+class StatSummary(NamedTuple):
+    """What one commit's `git show --stat` block says."""
+
+    block: str  # the block itself, capped
+    files: list[str]  # the paths it lists, in order
+    changed: int | None
+    insertions: int | None
+    deletions: int | None
+
+    def compact(self) -> str:
+        """A one-line form (`2 files, +10/-6`) for the event's detail text."""
+        changed = self.changed if self.changed is not None else len(self.files)
+
+        if not changed and self.insertions is None and self.deletions is None:
+            return ""
+
+        return f"{changed} {'file' if changed == 1 else 'files'}, +{self.insertions or 0}/-{self.deletions or 0}"
+
+
+def parse_stat(block: str) -> StatSummary:
+    """Read a `git show --stat` block: per-file lines, then `N files changed, ...`.
+
+    A file line is `path | 12 +++----` (or `path | Bin 123 -> 456 bytes`); a
+    rename keeps git's `old => new` spelling. Only the summary line carries the
+    counts, so a block without it keeps them all `None`.
+    """
+    text = block[:_STAT_LIMIT]
+    files: list[str] = []
+    changed = insertions = deletions = None
+
+    for line in text.splitlines():
+        summary = _STAT_CHANGED.match(line)
+
+        if summary:
+            changed = int(summary.group(1))
+            found = _STAT_INSERTIONS.search(line)
+            insertions = int(found.group(1)) if found else None
+            found = _STAT_DELETIONS.search(line)
+            deletions = int(found.group(1)) if found else None
+            continue
+
+        file_line = _STAT_FILE.match(line)
+
+        if file_line:
+            files.append(file_line.group(1))
+
+    return StatSummary(block=text.strip(), files=files, changed=changed, insertions=insertions, deletions=deletions)
 
 
 def make_event(
@@ -326,15 +387,56 @@ class GitHistorySource(SourceProvider):
         remote = str(raw.get("remote") or "").strip()
         reference = str(raw.get("reference") or "").strip()
         label = branch or reference or commit
+        stat = str(raw.get("stat") or "").strip()
+        stats = parse_stat(stat) if stat else None
 
         if kind == "commit":
             title = message[:120]
-            detail = message
+            # The diff summary rides along in the detail text (still starting
+            # with the subject, so a search by message keeps working).
+            summary = stats.compact() if stats is not None else ""
+            detail = f"{message} · {summary}" if summary else message
             dedup_key = dedup(self.name, repository, commit)
+        elif kind in _REWRITE_KINDS:
+            rewritten = raw.get("rewritten") if isinstance(raw.get("rewritten"), dict) else {}
+            count = int(rewritten.get("count") or 0)
+            # `rebase <branch>` / `amend <branch>`, with how many commits moved.
+            title = f"{kind} {label}"
+            detail = f"{title} · {count} {'commit' if count == 1 else 'commits'}" if count else title
+            dedup_key = dedup(self.name, kind, repository, commit, str(raw.get("previous") or ""))
         else:
             title = f"{kind} {label} → {remote}".strip()
             detail = f"{title} ({commit[:12]})"
             dedup_key = dedup(self.name, kind, repository, reference or label, commit, remote)
+
+        data: dict[str, Any] = {
+            "source": self.name,
+            "repository": repository,
+            "commit": commit,
+            "branch": branch or None,
+            "reference": reference or None,
+            "remote": remote or None,
+            "previous": raw.get("previous"),
+            "author": raw.get("author"),
+            "email": raw.get("email"),
+        }
+
+        if stats is not None:
+            data["stat"] = stats.block or None
+            data["files"] = stats.files or None
+            data["insertions"] = stats.insertions
+            data["deletions"] = stats.deletions
+
+        if kind in _REWRITE_KINDS:
+            # The old -> new map ties the rewritten commits to the ones the
+            # rebase replaced; `onto` is the commit they were replayed onto.
+            data["rewritten"] = rewritten or None
+            data["onto"] = raw.get("onto") or None
+
+        if raw.get("replayed"):
+            # post-commit flags the commits a rebase replayed (new ids, so they
+            # are new events; this is what tells them from fresh work).
+            data["replayed"] = True
 
         return make_event(
             kind=kind,
@@ -344,17 +446,7 @@ class GitHistorySource(SourceProvider):
             title=title,
             detail=detail,
             tags=[tag for tag in ("git", kind, branch) if tag],
-            data={
-                "source": self.name,
-                "repository": repository,
-                "commit": commit,
-                "branch": branch or None,
-                "reference": reference or None,
-                "remote": remote or None,
-                "previous": raw.get("previous"),
-                "author": raw.get("author"),
-                "email": raw.get("email"),
-            },
+            data=data,
             dedup_key=dedup_key,
         )
 

@@ -286,12 +286,17 @@ async def program_end(payload: ProgramRef, session: SessionDep) -> ProgramOut:
 async def consolidate_programs(
     request: Request, session: SessionDep, idle_seconds: int = Query(3600, gt=0)
 ) -> ConsolidateOut:
-    """Tidy the stored program history.
+    """Tidy the stored history.
 
     Finished programs are rewritten from their own events: a program with no events is
     deleted, each one is trimmed to its first and last non-idle boundary, and an idle
     gap longer than ``idle_seconds`` splits it into separate blocks so the dead time is
     not counted as presence. Running programs (``ended_at`` unset) are left alone.
+
+    Desktop ``focus`` opens whose span already has a close are dropped too: the close
+    carries the span's ``duration_ms``, so the open row only survives as the duplicate
+    readers merge away (see ``_merge_focus_spans``). A trailing open with no close is
+    the still-running span and is kept.
     """
     now = datetime.now(UTC)
     await _expire_stale(session, now, _stale_after(request))
@@ -365,9 +370,49 @@ async def consolidate_programs(
             )
             split += 1
 
+    dropped = await _drop_matched_focus_opens(session)
     await session.commit()
 
-    return ConsolidateOut(removed=removed, trimmed=trimmed, split=split)
+    return ConsolidateOut(removed=removed, trimmed=trimmed, split=split, dropped_focus_opens=dropped)
+
+
+def _focus_open_pairs(events: list[ActivityEvent]) -> list[ActivityEvent]:
+    """Return the ``focus`` opens consumed by a close, in ``(timestamp, id)`` order.
+
+    The watcher writes a span as an open (no ``duration_ms``) followed by the close
+    carrying ``duration_ms`` — and at a focus switch the close of the old span plus
+    the open of the new one share a timestamp, with the close inserted first. Walking
+    in that order therefore pairs exactly like ``_merge_focus_spans`` does: an open is
+    consumed by the next close, an open with no close is the live trailing span.
+    """
+    ordered = sorted(
+        (event for event in events if event.source == _USER_SOURCE and event.kind == "focus"),
+        key=lambda event: (event.timestamp, event.id or 0),
+    )
+    matched: list[ActivityEvent] = []
+    open_event: ActivityEvent | None = None
+
+    for event in ordered:
+        if event.duration_ms is None:
+            open_event = event
+            continue
+
+        if open_event is not None:
+            matched.append(open_event)
+            open_event = None
+
+    return matched
+
+
+async def _drop_matched_focus_opens(session: AsyncSession) -> int:
+    """Delete every windows ``focus`` open whose span already has a close."""
+    stmt = select(ActivityEvent).where(ActivityEvent.source == _USER_SOURCE, ActivityEvent.kind == "focus")
+    matched = _focus_open_pairs(list((await session.execute(stmt)).scalars().all()))
+
+    for event in matched:
+        await session.delete(event)
+
+    return len(matched)
 
 
 def _program_bounds(program: Program, query_end: datetime, now: datetime) -> tuple[datetime, datetime]:
@@ -797,7 +842,7 @@ async def user_timeline(
 
 
 _CODE_SOURCE = "git"
-_CODE_KINDS = ("commit", "push")
+_CODE_KINDS = ("commit", "push", "rebase", "amend")
 
 
 @router.get("/timelines/code", response_model=CodeTimeline)
@@ -889,6 +934,8 @@ def _merge_focus_spans(events: list[ActivityEvent]) -> list[EventOut]:
     The desktop watcher records a span as an open (no ``duration_ms``) followed by a
     close (with ``duration_ms``). Read back verbatim, every span shows up twice; here
     they become one event dated at the span start and carrying the span's duration.
+    Once consolidate has dropped the open, the close alone still yields that event,
+    dated back by its ``duration_ms``.
     """
     ordered = sorted(events, key=lambda event: (event.timestamp, event.id or 0))
     merged: list[EventOut] = []
@@ -909,7 +956,11 @@ def _merge_focus_spans(events: list[ActivityEvent]) -> list[EventOut]:
             merged.append(span)
             open_event = None
         else:
-            merged.append(EventOut.from_event(event))
+            # The open row may have been tidied away by consolidate; the close
+            # alone still knows where the span began.
+            span = EventOut.from_event(event)
+            span.timestamp = as_utc(event.timestamp) - timedelta(milliseconds=event.duration_ms)
+            merged.append(span)
 
     if open_event is not None:
         merged.append(EventOut.from_event(open_event))

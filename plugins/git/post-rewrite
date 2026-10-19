@@ -1,0 +1,100 @@
+#!/bin/sh
+#
+# post-rewrite - report a rewritten history (rebase or `git commit --amend`).
+#
+# Git runs it once per rewrite operation: `$1` says what happened (`rebase` or
+# `amend`) and stdin carries one `old-sha new-sha` pair per rewritten commit,
+# oldest first. The replayed commits themselves are already reported by
+# post-commit — they are new commits with new ids — so this hook records the
+# operation as its own event instead: a rebase shows up as one row next to the
+# commits it moved, and the map keeps the old and new ids linked.
+#
+# Install, from the repository you want to watch:
+#   git config core.hooksPath /absolute/path/to/activity_monitor/plugins/git
+# or copy/symlink this file into .git/hooks/post-rewrite and make it executable.
+#
+# Like the other hooks it never blocks a rewrite: if the monitor is unreachable
+# it exits 0, and it can never fail the rewrite itself.
+
+URL_BASE="${ACTIVITY_MONITOR_URL:-http://127.0.0.1:8001}"
+
+command -v curl >/dev/null 2>&1 || exit 0
+
+reason="${1:-rewrite}"
+[ "$reason" = "amend" ] || reason="rebase"
+
+rewritten=$(cat)
+[ -n "$rewritten" ] || exit 0
+
+repo=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+gitdir=$(git rev-parse --git-dir 2>/dev/null)
+
+branch=$(git branch --show-current 2>/dev/null)
+[ "$branch" = "HEAD" ] && branch=""
+
+author=$(git log -1 --pretty=%an 2>/dev/null)
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+host="${ACTIVITY_MONITOR_ORIGIN:-$(hostname 2>/dev/null)}"
+actor="${ACTIVITY_MONITOR_DISPLAY_USER:-$author}"
+
+# The rewritten map: `old new` pairs, capped at 100, plus the count, the old
+# head (first old sha) and the new one (last new sha). Shas are hex, so they
+# need no JSON escaping.
+old=$(printf '%s' "$rewritten" | awk 'NR == 1 {print $1}')
+head=$(printf '%s' "$rewritten" | awk 'END {print $2}')
+count=$(printf '%s' "$rewritten" | awk 'END {print NR}')
+pairs=$(printf '%s' "$rewritten" | awk '
+    NR <= 100 { list = list sprintf("%s[\"%s\",\"%s\"]", (list ? "," : ""), $1, $2) }
+    END { printf "[%s]", list }')
+
+# A rebase knows what it replayed onto; its state directory still exists here.
+onto=""
+if [ -n "$gitdir" ]; then
+    onto=$(cat "$gitdir/rebase-merge/onto" 2>/dev/null)
+    [ -n "$onto" ] || onto=$(cat "$gitdir/rebase-apply/onto" 2>/dev/null)
+fi
+
+json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n'
+}
+
+json_field() {
+    printf '"%s"' "$(json_escape "$1")"
+}
+
+payload=$(printf '{"kind":%s,"repository":%s,"host":%s,"actor":%s,"branch":%s,"commit":%s,"previous":%s,"onto":%s,"rewritten":%s,"timestamp":%s}' \
+    "$(json_field "$reason")" \
+    "$(json_field "$repo")" \
+    "$(json_field "$host")" \
+    "$(json_field "$actor")" \
+    "$(json_field "$branch")" \
+    "$(json_field "$head")" \
+    "$(json_field "$old")" \
+    "$(json_field "$onto")" \
+    "$(printf '{"count":%s,"pairs":%s}' "$count" "$pairs")" \
+    "$(json_field "$timestamp")")
+
+CURL_OPTS=""
+if [ -n "${ACTIVITY_MONITOR_CLIENT_CERT:-}" ] && [ -n "${ACTIVITY_MONITOR_CLIENT_KEY:-}" ]; then
+  CURL_OPTS="$CURL_OPTS --cert ${ACTIVITY_MONITOR_CLIENT_CERT} --key ${ACTIVITY_MONITOR_CLIENT_KEY}"
+elif [ -n "${ACTIVITY_MONITOR_CLIENT_CERT:-}" ]; then
+  CURL_OPTS="$CURL_OPTS --cert ${ACTIVITY_MONITOR_CLIENT_CERT}"
+fi
+if [ -n "${ACTIVITY_MONITOR_CA_CERT:-}" ]; then
+  CURL_OPTS="$CURL_OPTS --cacert ${ACTIVITY_MONITOR_CA_CERT}"
+fi
+if [ -n "${ACTIVITY_MONITOR_USERNAME:-}" ]; then
+  CURL_OPTS="$CURL_OPTS -u ${ACTIVITY_MONITOR_USERNAME}:${ACTIVITY_MONITOR_PASSWORD:-}"
+fi
+INSECURE="${ACTIVITY_MONITOR_SSL_INSECURE:-${ACTIVITY_MONITOR_INSECURE:-}}"
+case "$INSECURE" in
+  1|true|yes|on) CURL_OPTS="$CURL_OPTS -k" ;;
+esac
+
+curl -sS -m 2 -o /dev/null \
+    $CURL_OPTS \
+    -X POST "${URL_BASE}/api/ingest/git" \
+    -H "Content-Type: application/json" \
+    --data "$payload" || true
+
+exit 0
