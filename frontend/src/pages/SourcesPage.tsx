@@ -130,7 +130,7 @@ export default function SourcesPage() {
                     Push events
                 </Typography>
                 <Typography variant="body2" color="text.secondary" gutterBottom>
-                    Push-based sources (e.g. an opencode plugin) post events to the ingest endpoint:
+                    Push-based sources (e.g. an opencode plugin) post events with the source name in the payload:
                 </Typography>
                 <Box
                     component="pre"
@@ -143,9 +143,9 @@ export default function SourcesPage() {
                         fontSize: 12,
                     }}
                 >
-{`curl -X POST http://localhost:8001/api/ingest/opencode \\
+{`curl -X POST http://localhost:8001/api/ingest/event \\
   -H "Content-Type: application/json" \\
-  -d '{"events": [
+  -d '{"source": "opencode", "events": [
     {"id": "abc", "kind": "tool_call", "actor": "agent-a",
      "task": "feature-x", "timestamp": "2026-10-10T09:00:00",
      "title": "edited main.py", "tags": ["edit"]}

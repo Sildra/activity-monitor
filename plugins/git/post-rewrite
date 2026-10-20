@@ -62,7 +62,7 @@ json_field() {
     printf '"%s"' "$(json_escape "$1")"
 }
 
-payload=$(printf '{"kind":%s,"repository":%s,"host":%s,"actor":%s,"branch":%s,"commit":%s,"previous":%s,"onto":%s,"rewritten":%s,"timestamp":%s}' \
+payload=$(printf '{"source":"git","kind":%s,"repository":%s,"host":%s,"actor":%s,"branch":%s,"commit":%s,"previous":%s,"onto":%s,"rewritten":%s,"timestamp":%s}' \
     "$(json_field "$reason")" \
     "$(json_field "$repo")" \
     "$(json_field "$host")" \
@@ -93,7 +93,7 @@ esac
 
 curl -sS -m 2 -o /dev/null \
     $CURL_OPTS \
-    -X POST "${URL_BASE}/api/ingest/git" \
+    -X POST "${URL_BASE}/api/ingest/event" \
     -H "Content-Type: application/json" \
     --data "$payload" || true
 

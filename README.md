@@ -247,4 +247,6 @@ setups; only commit `certs/*.crt` if needed, never `.key` or `.p12`.
 
 Sources are configured in `config.yaml` under `sources`. Each has a `type` and optional
 parameters. The backend polls pull sources on demand via the API or you can push events
-to the ingest endpoints.
+to `POST /api/ingest/event` with the source name in the payload — a name missing from
+the config is accepted anyway (a transient push provider), so new push sources need no
+setup.

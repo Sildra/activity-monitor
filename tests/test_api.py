@@ -38,12 +38,17 @@ PUSH_SOURCE = "sources:\n  opencode:\n    kind: Push\n    enabled: true\n"
 GIT_SOURCE = "sources:\n  git:\n    kind: GitHistory\n    enabled: true\n    repositories: []\n"
 
 
+def post_event(client: TestClient, source: str, body: dict, **kwargs: object):
+    """POST to the generic ingest endpoint with the payload's source filled in."""
+    return client.post("/api/ingest/event", json={"source": source, **body}, **kwargs)
+
+
 def test_ingest_dedup_and_stats(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE) as client:
         event = {"id": "1", "kind": "tool_call", "actor": "agent-a", "task": "feature-x", "title": "edited"}
 
-        assert client.post("/api/ingest/opencode", json=event).json() == {"accepted": 1}
-        assert client.post("/api/ingest/opencode", json=event).json() == {"accepted": 0}
+        assert post_event(client, "opencode", event).json() == {"accepted": 1}
+        assert post_event(client, "opencode", event).json() == {"accepted": 0}
 
         stats = client.get("/api/stats").json()
         assert stats == {"events": 1, "sources": 1, "actors": 1, "tasks": 1}
@@ -77,7 +82,7 @@ def test_task_set_backfills_program_work_until_previous_task(tmp_path: Path) -> 
             if task is not None:
                 body["task"] = task
 
-            assert client.post("/api/ingest/opencode", json=body).json() == {"accepted": 1}
+            assert post_event(client, "opencode", body).json() == {"accepted": 1}
 
         def task_of(title: str) -> str | None:
             return next(event["task"] for event in client.get("/api/tasks").json() if event["title"] == title)
@@ -128,8 +133,8 @@ def test_git_push_registers_branch_and_commit(tmp_path: Path) -> None:
             "timestamp": "2026-01-01T00:00:00Z",
         }
 
-        assert client.post("/api/ingest/git", json=push).json() == {"accepted": 1}
-        assert client.post("/api/ingest/git", json=push).json() == {"accepted": 0}
+        assert post_event(client, "git", push).json() == {"accepted": 1}
+        assert post_event(client, "git", push).json() == {"accepted": 0}
 
         pushes = client.get("/api/tasks", params={"kind": "push"}).json()
         assert len(pushes) == 1
@@ -146,7 +151,7 @@ def test_git_push_registers_branch_and_commit(tmp_path: Path) -> None:
             "timestamp": "2026-01-01T00:00:01Z",
         }
 
-        assert client.post("/api/ingest/git", json=commit).json() == {"accepted": 1}
+        assert post_event(client, "git", commit).json() == {"accepted": 1}
         assert {event["kind"] for event in client.get("/api/tasks").json()} == {"push", "commit"}
 
 
@@ -162,7 +167,7 @@ def test_git_actor_override_keeps_author(tmp_path: Path) -> None:
             "timestamp": "2026-01-01T00:00:00Z",
         }
 
-        assert client.post("/api/ingest/git", json=commit).json() == {"accepted": 1}
+        assert post_event(client, "git", commit).json() == {"accepted": 1}
 
         event = client.get("/api/tasks", params={"kind": "commit"}).json()[0]
         assert event["actor"] == "sildr"
@@ -177,9 +182,10 @@ def test_git_commit_stat_is_summarized(tmp_path: Path) -> None:
             " 2 files changed, 10 insertions(+), 6 deletions(-)\n"
         )
 
-        assert client.post(
-            "/api/ingest/git",
-            json={
+        assert post_event(
+            client,
+            "git",
+            {
                 "kind": "commit",
                 "repository": "/repo",
                 "commit": "abc123",
@@ -191,9 +197,10 @@ def test_git_commit_stat_is_summarized(tmp_path: Path) -> None:
         ).json() == {"accepted": 1}
 
         # Without a summary the commit keeps the plain message and no stat keys.
-        assert client.post(
-            "/api/ingest/git",
-            json={
+        assert post_event(
+            client,
+            "git",
+            {
                 "kind": "commit",
                 "repository": "/repo",
                 "commit": "def456",
@@ -221,9 +228,10 @@ def test_git_rebase_and_amend_are_recorded(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setenv("TASK_PATTERN", r"JIRA-[0-9]+")
 
     with make_client(tmp_path, GIT_SOURCE) as client:
-        assert client.post(
-            "/api/ingest/git",
-            json={
+        assert post_event(
+            client,
+            "git",
+            {
                 "kind": "rebase",
                 "repository": "/repo",
                 "branch": "feature/JIRA-42",
@@ -237,9 +245,10 @@ def test_git_rebase_and_amend_are_recorded(tmp_path: Path, monkeypatch: pytest.M
         ).json() == {"accepted": 1}
 
         # An amend is the same shape with one rewritten commit.
-        assert client.post(
-            "/api/ingest/git",
-            json={
+        assert post_event(
+            client,
+            "git",
+            {
                 "kind": "amend",
                 "repository": "/repo",
                 "branch": "feature/JIRA-42",
@@ -263,7 +272,7 @@ def test_git_rebase_and_amend_are_recorded(tmp_path: Path, monkeypatch: pytest.M
             "actor": "Jane",
             "timestamp": "2026-01-01T00:02:00Z",
         }
-        assert client.post("/api/ingest/git", json=repeat).json() == {"accepted": 0}
+        assert post_event(client, "git", repeat).json() == {"accepted": 0}
 
         events = {event["kind"]: event for event in client.get("/api/tasks").json()}
 
@@ -285,9 +294,10 @@ def test_git_rebase_and_amend_are_recorded(tmp_path: Path, monkeypatch: pytest.M
 
 def test_git_replayed_commit_keeps_its_flag(tmp_path: Path) -> None:
     with make_client(tmp_path, GIT_SOURCE) as client:
-        assert client.post(
-            "/api/ingest/git",
-            json={
+        assert post_event(
+            client,
+            "git",
+            {
                 "kind": "commit",
                 "repository": "/repo",
                 "commit": "new9",
@@ -340,7 +350,7 @@ def test_git_task_derived_from_pattern(tmp_path: Path, monkeypatch: pytest.Monke
             },
         ]
 
-        assert client.post("/api/ingest/git", json={"events": events}).json() == {"accepted": 3}
+        assert post_event(client, "git", {"events": events}).json() == {"accepted": 3}
 
         tasks = {event["data"]["commit"]: event["task"] for event in client.get("/api/tasks").json()}
         assert tasks == {"c1": "JIRA-123", "c2": "JIRA-456", "c3": "repo"}
@@ -369,7 +379,7 @@ def test_code_timeline_returns_commits_and_pushes(tmp_path: Path) -> None:
             },
         ]
 
-        assert client.post("/api/ingest/git", json={"events": events}).json() == {"accepted": 2}
+        assert post_event(client, "git", {"events": events}).json() == {"accepted": 2}
 
         body = client.get(
             "/api/timelines/code", params={"start": "2026-02-01T00:00:00Z", "end": "2026-02-02T00:00:00Z"}
@@ -386,9 +396,10 @@ def test_code_timeline_returns_commits_and_pushes(tmp_path: Path) -> None:
 
 def test_agentic_timeline_groups_by_actor(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE) as client:
-        client.post(
-            "/api/ingest/opencode",
-            json={
+        post_event(
+            client,
+            "opencode",
+            {
                 "events": [
                     {"id": "a", "actor": "agent-a", "kind": "edit", "title": "one"},
                     {"id": "b", "actor": "agent-b", "kind": "test", "title": "two"},
@@ -404,9 +415,10 @@ def test_agentic_timeline_groups_by_actor(tmp_path: Path) -> None:
 
 def test_task_search_and_summary(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE) as client:
-        client.post(
-            "/api/ingest/opencode",
-            json={
+        post_event(
+            client,
+            "opencode",
+            {
                 "events": [
                     {"id": "a", "actor": "user", "task": "feature-x", "title": "wrote parser"},
                     {"id": "b", "actor": "user", "task": "feature-y", "title": "wrote tests"},
@@ -421,9 +433,26 @@ def test_task_search_and_summary(tmp_path: Path) -> None:
         assert [event["title"] for event in results] == ["wrote tests"]
 
 
-def test_unknown_source_is_404(tmp_path: Path) -> None:
+def test_ingest_requires_a_source_name(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE) as client:
-        assert client.post("/api/ingest/missing", json={"title": "x"}).status_code == 404
+        assert client.post("/api/ingest/event", json={"title": "x"}).status_code == 400
+        assert client.post("/api/ingest/event", json={"source": "", "title": "x"}).status_code == 400
+
+
+def test_ingest_accepts_unregistered_source(tmp_path: Path) -> None:
+    """A name missing from the config gets a transient push provider — no setup needed."""
+    with make_client(tmp_path, PUSH_SOURCE) as client:
+        assert client.post("/api/ingest/event", json={"source": "brand-new", "title": "x"}).json() == {"accepted": 1}
+        # Nothing is remembered: only the configured sources are listed.
+        assert [source["name"] for source in client.get("/api/sources").json()] == ["opencode"]
+
+
+def test_ingest_uses_the_configured_source_provider(tmp_path: Path) -> None:
+    """A configured name (even a pull one) is parsed by its own provider, like the git hooks."""
+    with make_client(tmp_path, GIT_SOURCE) as client:
+        assert post_event(client, "git", {"id": "abc", "title": "x", "timestamp": "2026-10-01T10:00:00Z"}).json() == {
+            "accepted": 1
+        }
 
 
 def test_pull_source_cannot_be_fetched_when_push(tmp_path: Path) -> None:
@@ -526,9 +555,10 @@ def test_consolidate_removes_empty_trims_and_splits_idle(tmp_path: Path) -> None
             conn.close()
 
         def event(kind: str, at: datetime) -> None:
-            client.post(
-                "/api/ingest/opencode",
-                json={
+            post_event(
+                client,
+                "opencode",
+                {
                     "id": f"p1-{kind}-{at.isoformat()}",
                     "kind": kind,
                     "actor": "user",
@@ -583,7 +613,7 @@ def test_consolidate_drops_matched_focus_opens(tmp_path: Path) -> None:
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 
         def send(payload: dict) -> None:
-            assert client.post("/api/ingest/windows", json=payload).status_code == 200
+            assert post_event(client, "windows", payload).status_code == 200
 
         def focus_rows() -> list[tuple[str, int | None]]:
             conn = sqlite3.connect(db_path)
@@ -702,9 +732,10 @@ def test_presence_timeline_merges_lanes_and_attaches_events(tmp_path: Path) -> N
         program("p2", t0 + timedelta(minutes=60), t0 + timedelta(minutes=90))
         program("p3", t0 + timedelta(minutes=15), t0 + timedelta(minutes=45))
 
-        client.post(
-            "/api/ingest/opencode",
-            json={
+        post_event(
+            client,
+            "opencode",
+            {
                 "id": "e1",
                 "kind": "prompt.begin",
                 "actor": "user",
@@ -750,9 +781,10 @@ def test_presence_multiple_prompts_toggle_state(tmp_path: Path) -> None:
         conn.close()
 
         def prompt(pid: str, msg: str, kind: str, minutes: int) -> None:
-            client.post(
-                "/api/ingest/opencode",
-                json={
+            post_event(
+                client,
+                "opencode",
+                {
                     "id": pid,
                     "kind": kind,
                     "actor": "user",
@@ -812,9 +844,10 @@ def test_presence_permission_waiting_returns_to_active(tmp_path: Path) -> None:
         conn.close()
 
         def event(pid: str, kind: str, minutes: int, data: dict | None = None) -> None:
-            client.post(
-                "/api/ingest/opencode",
-                json={
+            post_event(
+                client,
+                "opencode",
+                {
                     "id": pid,
                     "kind": kind,
                     "actor": "user",
@@ -856,9 +889,10 @@ def test_presence_question_waiting_returns_to_active(tmp_path: Path) -> None:
         conn.close()
 
         def event(pid: str, kind: str, minutes: int, data: dict | None = None) -> None:
-            client.post(
-                "/api/ingest/opencode",
-                json={
+            post_event(
+                client,
+                "opencode",
+                {
                     "id": pid,
                     "kind": kind,
                     "actor": "user",
@@ -888,9 +922,10 @@ def test_presence_timeline_with_aware_utc_query(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE) as client:
         client.post("/api/programs/start", json={"program_id": "p1", "source": "opencode", "host": "h1"})
 
-        client.post(
-            "/api/ingest/opencode",
-            json={
+        post_event(
+            client,
+            "opencode",
+            {
                 "id": "e1",
                 "kind": "prompt.begin",
                 "actor": "user",
@@ -923,7 +958,7 @@ def test_user_timeline_reports_focus_lanes_and_states(tmp_path: Path) -> None:
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 
         def send(payload: dict) -> None:
-            assert client.post("/api/ingest/windows", json=payload).status_code == 200
+            assert post_event(client, "windows", payload).status_code == 200
 
         send({"id": "1", "kind": "focus", "task": "code", "title": "editor", "timestamp": fmt(t0)})
         send(
@@ -986,7 +1021,7 @@ def test_user_timeline_open_span_clipped_when_watcher_stops(tmp_path: Path) -> N
         t0 = datetime(2026, 10, 1, 9, 0, 0, tzinfo=UTC)
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 
-        client.post("/api/ingest/windows", json={"id": "1", "kind": "focus", "task": "code", "timestamp": fmt(t0)})
+        post_event(client, "windows", {"id": "1", "kind": "focus", "task": "code", "timestamp": fmt(t0)})
 
         body = client.get(
             "/api/timelines/user", params={"start": fmt(t0), "end": fmt(t0 + timedelta(minutes=20))}
@@ -1005,7 +1040,7 @@ def test_user_timeline_open_span_stays_live_with_recent_events(tmp_path: Path) -
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 
         def send(payload: dict) -> None:
-            assert client.post("/api/ingest/windows", json=payload).status_code == 200
+            assert post_event(client, "windows", payload).status_code == 200
 
         # The watcher keeps pinging, so the open span is still trusted.
         send({"id": "1", "kind": "focus", "task": "code", "timestamp": fmt(t0)})
@@ -1032,9 +1067,10 @@ def test_windows_heartbeats_are_not_stored(tmp_path: Path) -> None:
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 
         for index in range(3):
-            response = client.post(
-                "/api/ingest/windows",
-                json={"id": str(index), "kind": "heartbeat", "timestamp": fmt(t0 + timedelta(minutes=index))},
+            response = post_event(
+                client,
+                "windows",
+                {"id": str(index), "kind": "heartbeat", "timestamp": fmt(t0 + timedelta(minutes=index))},
             )
 
             assert response.status_code == 200
@@ -1050,7 +1086,7 @@ def test_tasks_merges_windows_focus_spans(tmp_path: Path) -> None:
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 
         def send(payload: dict) -> None:
-            assert client.post("/api/ingest/windows", json=payload).status_code == 200
+            assert post_event(client, "windows", payload).status_code == 200
 
         send({"id": "1", "kind": "focus", "task": "code", "title": "editor", "timestamp": fmt(t0)})
         send(
@@ -1091,7 +1127,7 @@ AUTH = ("alice", "s3cret")
 def test_basic_auth_disabled_by_default(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE) as client:
         assert client.get("/api/stats").status_code == 200
-        assert client.post("/api/ingest/opencode", json={"id": "1", "title": "x"}).status_code == 200
+        assert post_event(client, "opencode", {"id": "1", "title": "x"}).status_code == 200
 
 
 def test_basic_auth_challenges_unauthenticated_requests(tmp_path: Path) -> None:
@@ -1113,8 +1149,8 @@ def test_basic_auth_accepts_valid_credentials(tmp_path: Path) -> None:
         assert client.get("/api/stats", auth=AUTH).status_code == 200
 
         event = {"id": "1", "kind": "tool_call", "actor": "agent-a", "title": "edited"}
-        assert client.post("/api/ingest/opencode", json=event).status_code == 401
-        assert client.post("/api/ingest/opencode", json=event, auth=AUTH).json() == {"accepted": 1}
+        assert post_event(client, "opencode", event).status_code == 401
+        assert post_event(client, "opencode", event, auth=AUTH).json() == {"accepted": 1}
         assert client.get("/api/stats", auth=AUTH).json()["events"] == 1
 
 
@@ -1134,7 +1170,7 @@ def test_basic_auth_leaves_docs_public(tmp_path: Path) -> None:
 def test_ingest_records_origin_host(tmp_path: Path) -> None:
     with make_client(tmp_path, PUSH_SOURCE) as client:
         event = {"id": "1", "host": "laptop", "title": "x"}
-        assert client.post("/api/ingest/opencode", json=event).json() == {"accepted": 1}
+        assert post_event(client, "opencode", event).json() == {"accepted": 1}
 
         stored = client.get("/api/tasks").json()[0]
         assert stored["host"] == "laptop"
@@ -1145,7 +1181,7 @@ def test_ingest_host_defaults_to_hostname(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.delenv("ACTIVITY_MONITOR_ORIGIN", raising=False)
 
     with make_client(tmp_path, PUSH_SOURCE) as client:
-        client.post("/api/ingest/opencode", json={"id": "1", "title": "x"})
+        post_event(client, "opencode", {"id": "1", "title": "x"})
         assert client.get("/api/tasks").json()[0]["host"] == socket.gethostname()
 
 
@@ -1153,7 +1189,7 @@ def test_origin_env_overrides_ingest_host(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setenv("ACTIVITY_MONITOR_ORIGIN", "laptop")
 
     with make_client(tmp_path, PUSH_SOURCE) as client:
-        client.post("/api/ingest/opencode", json={"id": "1", "title": "x"})
+        post_event(client, "opencode", {"id": "1", "title": "x"})
         assert client.get("/api/tasks").json()[0]["host"] == "laptop"
 
 
@@ -1171,7 +1207,7 @@ def test_host_column_backfilled_for_existing_db(tmp_path: Path) -> None:
 
     with make_client(tmp_path, PUSH_SOURCE) as client:
         event = {"id": "1", "host": "laptop", "title": "x"}
-        assert client.post("/api/ingest/opencode", json=event).json() == {"accepted": 1}
+        assert post_event(client, "opencode", event).json() == {"accepted": 1}
         assert client.get("/api/tasks").json()[0]["host"] == "laptop"
 
     conn = sqlite3.connect(db_path)

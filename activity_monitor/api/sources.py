@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from activity_monitor.api.deps import SessionDep
 from activity_monitor.model.event import SourceInfo
 from activity_monitor.services.events import store_events
-from activity_monitor.services.sources import SourceProvider
+from activity_monitor.services.sources import PushSource, SourceProvider
 
 router = APIRouter(prefix="/api")
 
@@ -42,10 +42,22 @@ async def fetch_source(name: str, request: Request, session: SessionDep) -> dict
     return {"fetched": len(raws), "accepted": await store_events(session, provider, raws)}
 
 
-@router.post("/ingest/{name}")
-async def ingest(name: str, payload: dict[str, Any], request: Request, session: SessionDep) -> dict[str, int]:
-    provider = _provider(request, name)
+@router.post("/ingest/event")
+async def ingest_event(payload: dict[str, Any], request: Request, session: SessionDep) -> dict[str, int]:
+    """Accept a single event or a batch; the payload's ``source`` names its producer."""
+    body = dict(payload)
+    source = body.pop("source", None)
 
-    events = payload.get("events") if isinstance(payload.get("events"), list) else [payload]
+    if not isinstance(source, str) or not source:
+        raise HTTPException(400, "Payload must carry a non-empty 'source' name")
+
+    # An unregistered name gets a transient push provider, so any client can report
+    # under its own name without touching the config. Nothing is remembered:
+    # `/api/sources` keeps listing only the configured sources, and a configured
+    # source (e.g. `windows` or `git`) is reused so its settings apply and its
+    # heartbeats still feed the user timeline's staleness check.
+    provider = request.app.state.sources.get(source)
+    provider = provider or PushSource(source, request.app.state.config.source_settings(source))
+    events = body.get("events") if isinstance(body.get("events"), list) else [body]
 
     return {"accepted": await store_events(session, provider, events)}

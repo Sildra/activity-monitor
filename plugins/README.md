@@ -146,7 +146,8 @@ indicator (below) has nothing feeding it — it just sits on `Connecting`.
 
 Make sure `ACTIVITY_MONITOR_URL` (or legacy `ACTIVITY_MONITOR_PORT`/`ACTIVITY_MONITOR_BASE_URL`)
 is set before opencode starts, then **restart opencode** whenever the plugin changes.
-The plugin posts to `POST /api/ingest/opencode` and registers its heartbeat via
+The plugin posts to `POST /api/ingest/event` (with `source: "opencode"` in the
+payload) and registers its heartbeat via
 `POST /api/programs/start|beat|end`. For mTLS, configure the client certificates
 with the shared `ACTIVITY_MONITOR_CA_CERT` / `ACTIVITY_MONITOR_CLIENT_CERT` /
 `ACTIVITY_MONITOR_CLIENT_KEY` variables (the plugins pass them to `node:https`);
@@ -348,7 +349,8 @@ writes straight to the database and needs no port or ingest call.
 ## Git hooks
 
 Two hooks register git activity with the monitor, both POSTing to
-`POST /api/ingest/git` (the `git` source), both reading `ACTIVITY_MONITOR_PORT`,
+`POST /api/ingest/event` (with `source: "git"` in the payload), both reading
+`ACTIVITY_MONITOR_PORT`,
 and both always exiting `0`, so a stopped monitor never blocks a commit or push.
 
 - **`post-commit`** — on every commit, registers the **repository**, **current

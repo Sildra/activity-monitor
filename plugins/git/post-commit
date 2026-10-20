@@ -76,7 +76,7 @@ json_text() {
     printf '"%s"' "$body"
 }
 
-payload=$(printf '{"repository":%s,"host":%s,"actor":%s,"commit":%s,"branch":%s,"author":%s,"email":%s,"timestamp":%s,"message":%s,"stat":%s,"replayed":%s}' \
+payload=$(printf '{"source":"git","repository":%s,"host":%s,"actor":%s,"commit":%s,"branch":%s,"author":%s,"email":%s,"timestamp":%s,"message":%s,"stat":%s,"replayed":%s}' \
     "$(json_field "$repo")" \
     "$(json_field "$host")" \
     "$(json_field "$actor")" \
@@ -108,7 +108,7 @@ esac
 
 curl -sS -m 2 -o /dev/null \
     $CURL_OPTS \
-    -X POST "${URL_BASE}/api/ingest/git" \
+    -X POST "${URL_BASE}/api/ingest/event" \
     -H "Content-Type: application/json" \
     --data "$payload" || true
 

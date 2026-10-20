@@ -293,7 +293,8 @@ class HttpSink:
         insecure: bool = False,
         on_status: Callable[[bool], None] | None = None,
     ) -> None:
-        self.url = f"{base_url.rstrip('/')}/api/ingest/{source}"
+        self.url = f"{base_url.rstrip('/')}/api/ingest/event"
+        self._source = source
         self._context = build_ssl_context(cafile=cafile, certfile=certfile, keyfile=keyfile, insecure=insecure)
         self._auth = build_auth_header(username=username, password=password)
         self._on_status = on_status
@@ -305,9 +306,10 @@ class HttpSink:
             headers["Authorization"] = self._auth
 
         delivered = False
+        body = json.dumps({"source": self._source, **payload}).encode("utf-8")
 
         for _ in range(3):
-            req = request.Request(self.url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+            req = request.Request(self.url, data=body, headers=headers, method="POST")
 
             try:
                 with request.urlopen(req, timeout=5, context=self._context):

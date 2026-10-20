@@ -47,7 +47,7 @@ React/TS/Vite frontend, single server serving the built frontend.
   lifecycle + prompts: on load it POSTs `/api/programs/start` with `program_id` = the OS PID
   (+ `host`), heartbeats `/api/programs/beat` every ~60s, and `/api/programs/end` on unload (the
   `setup` cleanup function). Prompts are posted as `prompt.begin`/`prompt.end` to
-  `/api/ingest/opencode` with a top-level `program: { id, source, host }` so the presence timeline
+  `/api/ingest/event` (source `opencode`) with a top-level `program: { id, source, host }` so the presence timeline
   can pin them to a lane (enabled via `opencode.json`; deterministic SHA-1 ids so re-sends dedupe).
   `prompt.begin` is recorded in the `ctx.session.hook("prompt", ...)` hook; `prompt.end` comes from
   the turn-completion event on `ctx.event.subscribe(...)` — `session.execution.succeeded` /
@@ -85,7 +85,7 @@ React/TS/Vite frontend, single server serving the built frontend.
   carry the method's required input. This is an OpenCode-only affordance, never sent to the Activity
   Monitor. Typecheck
   with `npm run typecheck` in the plugin folder. Restart opencode after editing the plugin.
-- `plugins/git/` — `post-commit` + `pre-push` git hooks POSTing to `/api/ingest/git`; commit
+- `plugins/git/` — `post-commit` + `pre-push` git hooks POSTing to `/api/ingest/event` (source `git`); commit
   registers branch + commit id (+ repo/author/subject) plus the commit's `git show --stat` diff
   summary (`parse_stat` keeps the block, the file list and the counts in
   `data.stat`/`data.files`/`data.insertions`/`data.deletions`, and appends a compact
@@ -119,7 +119,7 @@ React/TS/Vite frontend, single server serving the built frontend.
   (default 30), enters the locked state at the last pre-sleep tick — closed by the normal lock
   handling at wake (session woke unlocked) or at the real unlock (machine locked to sleep) — so
   sleeping time is not counted as attention. Standalone (`python -m activity_monitor.services.windows_watcher`)
-  it POSTs to `/api/ingest/windows`; embedded (`--watch-windows` / `general.watch_windows`) the backend
+  it POSTs to `/api/ingest/event` (the payload's `source` is `--source`, default `windows`); embedded (`--watch-windows` / `general.watch_windows`) the backend
   starts it in-process and it writes straight to the DB via `store_events`. While it runs it also
   emits a `heartbeat` every `heartbeat_seconds` (default 60) so the server can tell the watcher is
   alive; pings are liveness only and never stored (`store_events` keeps just the latest on the
@@ -177,7 +177,12 @@ React/TS/Vite frontend, single server serving the built frontend.
   and watcher `focus` events use the default `UNKNOWN_TASK`, `"Unknown"`) always send a task
   instead of leaving it empty.
   Pull fetches run off the event loop (`asyncio.to_thread`) because `fetch()` is blocking.
-- **Ingest**: idempotent on `dedup_key` (external `id` or payload hash). New events are stored,
+- **Ingest**: `POST /api/ingest/event` takes a single event or `{events: [...]}` batch with the
+  source name in the payload. A name not in the config gets a transient push provider — events are
+  accepted under any name, while `GET /api/sources` keeps listing only the configured ones; a
+  configured provider is reused (git events still parse through `GitHistorySource`, `windows`
+  heartbeats still feed the staleness check). Idempotent on `dedup_key` (external `id` or payload
+  hash). New events are stored,
   duplicates ignored. `store_events` in `services/events.py` is the single write path — except `heartbeat`
   records, which are liveness pings: they are never stored (the latest is kept on the source
   provider for the user timeline's staleness check). A top-level `host` in the
@@ -279,7 +284,7 @@ Delete `openapi_local.json` afterwards (gitignored).
 - **Tests**: `python -m pytest` from root (`pytest` + `httpx`; `TestClient` drives the full
   lifespan). Add endpoint tests beside `tests/test_api.py`.
 - **End-to-end**: run the backend and exercise pull sources via `POST /api/sources/{name}/fetch`
-  and pushes via `POST /api/ingest/{name}`.
+  and pushes via `POST /api/ingest/event`.
 
 ### Change Types
 

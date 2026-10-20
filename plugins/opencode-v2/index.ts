@@ -346,7 +346,7 @@ export default Plugin.define({
         };
 
         const ingest = (event: Record<string, unknown>): Promise<boolean> =>
-            post(`/api/ingest/${encodeURIComponent(source)}`, { ...event, host });
+            post("/api/ingest/event", { ...event, source, host });
 
         const register = (): Promise<boolean> =>
             post("/api/programs/start", { program_id: programId, source, host, actor: opts.actor }, 8, 1000);

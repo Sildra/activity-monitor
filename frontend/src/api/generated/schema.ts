@@ -38,7 +38,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/ingest/{name}": {
+    "/api/ingest/event": {
         parameters: {
             query?: never;
             header?: never;
@@ -47,8 +47,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ingest */
-        post: operations["ingest_api_ingest__name__post"];
+        /**
+         * Ingest Event
+         * @description Accept a single event or a batch; the payload's ``source`` names its producer.
+         */
+        post: operations["ingest_event_api_ingest_event_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -667,13 +670,11 @@ export interface operations {
             };
         };
     };
-    ingest_api_ingest__name__post: {
+    ingest_event_api_ingest_event_post: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                name: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody: {

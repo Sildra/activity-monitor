@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -441,11 +442,18 @@ class FakeResponse:
 def test_http_sink_reports_success(monkeypatch: pytest.MonkeyPatch) -> None:
     windows_watcher = load_watcher_module()
     states: list[bool] = []
-    monkeypatch.setattr(windows_watcher.request, "urlopen", lambda *args, **kwargs: FakeResponse())
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    def capture(req: Any, **kwargs: Any) -> FakeResponse:
+        seen.append((req.full_url, json.loads(req.data)))
+        return FakeResponse()
+
+    monkeypatch.setattr(windows_watcher.request, "urlopen", capture)
     sink = windows_watcher.HttpSink("http://localhost:8001", "windows", on_status=states.append)
 
     assert sink({"kind": "heartbeat"}) is True
     assert states == [True]
+    assert seen == [("http://localhost:8001/api/ingest/event", {"kind": "heartbeat", "source": "windows"})]
 
 
 def test_http_sink_reports_failure(monkeypatch: pytest.MonkeyPatch) -> None:
