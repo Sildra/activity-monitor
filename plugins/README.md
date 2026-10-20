@@ -82,8 +82,8 @@ set ACTIVITY_MONITOR_URL=https://localhost:8001        & rem cmd.exe
 
 ## Basic auth
 
-If the backend is started with HTTP Basic auth (see `general.basic_auth_username` /
-`--basic-auth-username` in the main `README.md`), every client must send credentials.
+If the backend is started with HTTP Basic auth (see `general.basic_auth_username` in
+the main `README.md`), every client must send credentials.
 Set the shared variables before starting the client:
 
 - `ACTIVITY_MONITOR_USERNAME` — the username.
@@ -310,41 +310,47 @@ dependencies) and windows-only.
 
 Each tick also compares the wall clock against the unbiased interrupt-time count
 (`QueryUnbiasedInterruptTime`), which stops while the machine is asleep. When
-they diverge by more than `--skew-seconds` (default 30) the watcher enters the
+they diverge by more than `watcher.skew_seconds` (default 30) the watcher enters the
 locked state at the last pre-sleep tick; the normal lock handling closes it (at
 wake if the session woke unlocked, or at the real unlock if the machine locked
 itself to sleep), so a sleeping machine's time is not mistaken for attention and
 a lock that preceded the sleep is not reported twice.
 
-Set `ACTIVITY_MONITOR_URL` (or legacy vars) and run it from the repo root:
+Set the backend in `config.yaml` (the file writes itself with every default when
+missing; `watcher.base_url` defaults to `http://127.0.0.1:8001`) and run it from the
+repo root:
+
+```yaml
+watcher:
+  tray: true
+  base_url: https://localhost:8001
+  source: windows
+  actor: sildr
+  host: laptop
+  task: JIRA-1
+  username: alice
+  password: s3cret
+  ca_cert: certs/ca.crt
+  client_cert: certs/client.crt
+  client_key: certs/client.key
+  poll: 1.0
+  idle_minutes: 2.0
+  skew_seconds: 30.0
+```
 
 ```bash
-$env:ACTIVITY_MONITOR_URL="https://localhost:8001"
 python -m activity_monitor.services.windows_watcher
 ```
 
-It defaults to `http://127.0.0.1:8001` if no URL is set. Every environment
-variable above has a matching flag, and the flag wins when both are set:
+The standalone watcher reads **only** the `watcher` section (ignoring `general`), and
+the environment variables above override the file when both are set. `--config PATH`
+picks another file; `--run SECONDS` / `--once` are testing aids. On any non-Windows OS
+the watcher is not implemented and exits quietly.
 
-```bash
-python -m activity_monitor.services.windows_watcher \
-    --base-url https://localhost:8001 --source windows \
-    --actor sildr --host laptop --task JIRA-1 \
-    --username alice --password s3cret \
-    --ca-cert certs/ca.crt --client-cert certs/client.crt --client-key certs/client.key \
-    --poll 1.0 --idle-minutes 2.0 --skew-seconds 30.0 --verbose
-```
-
-- `--base-url` / `--source` — backend root and `Push` source name.
-- `--actor` / `--host` / `--task` — event `actor`, origin `host` and `focus` task.
-- `--username` / `--password` — HTTP Basic auth.
-- `--ca-cert` / `--client-cert` / `--client-key` / `--insecure` — TLS / mTLS.
-- `--poll` / `--idle-minutes` / `--skew-seconds` — sampling thresholds.
-- `--run SECONDS` / `--once` / `--verbose` — testing aids.
-
-Alternatively, run it **inside** the backend (`python -m activity_monitor.main
---watch-windows`, or `general.watch_windows: true` in `config.yaml`): it then
-writes straight to the database and needs no port or ingest call.
+Alternatively, run it **inside** the backend (`watcher.enabled: true` in
+`config.yaml`): it then writes straight to the database and needs no port or ingest
+call. That mode uses the same `watcher` section (the connection and tray keys only
+apply standalone).
 
 ## Git hooks
 

@@ -19,15 +19,20 @@ entry points.
 
 ### 2. Configure
 
-Create `config.yaml` in the project root (or point to it with `--config`). A minimal
-example:
+`config.yaml` in the working directory is the one config file for both apps (or point
+to another with `--config`). It writes itself: started without it, the file is created
+with every default, and missing keys are filled in on load — so the file always shows
+all available knobs. The two sections:
 
 ```yaml
-general:
+general:            # the backend (API server)
   api_port: 8001
   database: activity_monitor.db
   stale_after_seconds: 300
-  watch_windows: false
+  tray: false       # tray icon while the server runs (Windows)
+watcher:            # the desktop watcher (see plugins/README.md)
+  enabled: false    # run it inside the backend (direct DB ingest)
+  tray: false       # tray icon while the standalone watcher runs (Windows)
 ```
 
 Sources need no configuration — see below.
@@ -42,11 +47,9 @@ python -m activity_monitor.main
 
 Or restart-supervised: `python supervisor.py`.
 
-Flags: `--config PATH`, `--database PATH`, `--port INT` (or `ACTIVITY_MONITOR_PORT`),
-`--watch-windows` (embed the desktop watcher), `--tray` (Windows tray icon with an
-`Exit` entry), `--ssl` / `--ssl-certfile` / `--ssl-keyfile` / `--ssl-ca-certs` /
-`--ssl-cert-reqs {none,optional,required}`, `--basic-auth-username` /
-`--basic-auth-password`.
+Flags: `--config PATH`, and `--openapi FILE` (dev tooling: dump the OpenAPI schema and
+exit). Everything else — port, database, embedded watcher (`watcher.enabled: true`),
+tray, SSL, basic auth — is configured in the file.
 
 The UI is served at `http://localhost:8001` (or `https://localhost:8001` if SSL is
 enabled). OpenAPI docs at `/docs` — the endpoint contract lives there.
@@ -62,18 +65,19 @@ hooks, the opencode plugins and the Windows watcher — install them via
 
 ## HTTPS & mTLS
 
-The backend can serve HTTPS and optionally require client certificates:
+The backend can serve HTTPS and optionally require client certificates; configure it
+in `config.yaml`:
 
-```bash
-python -m activity_monitor.main --ssl \
-  --ssl-certfile certs/server.crt \
-  --ssl-keyfile certs/server.key \
-  --ssl-ca-certs certs/ca.crt \
-  --ssl-cert-reqs required
+```yaml
+general:
+  ssl_enabled: true
+  ssl_certfile: certs/server.crt
+  ssl_keyfile: certs/server.key
+  ssl_ca_certs: certs/ca.crt
+  ssl_cert_reqs: required   # none|optional|required
 ```
 
-or via `config.yaml` (`general.ssl_enabled`, `ssl_certfile`, `ssl_keyfile`,
-`ssl_ca_certs`, `ssl_cert_reqs`). For `required`, only clients presenting a valid
+For `required`, only clients presenting a valid
 certificate signed by the CA can connect; for `optional`, an unauthenticated client
 may still connect. Generate a private CA, server and client certificates with
 OpenSSL by following `docs/mtls-setup.md`; import `ca.crt` as a trusted root and the
@@ -82,8 +86,8 @@ client `.p12` into the browser for UI access over mTLS.
 ## HTTP Basic auth
 
 As a transport-independent alternative (or complement) to mTLS, the `/api/*` routes
-can require HTTP Basic auth (`general.basic_auth_username` / `--basic-auth-username`,
-plus `basic_auth_password`). Requests without valid credentials get `401` with a
+can require HTTP Basic auth (`general.basic_auth_username` / `basic_auth_password`).
+Requests without valid credentials get `401` with a
 `WWW-Authenticate: Basic` challenge; the static UI and `/docs` stay public (the
 browser prompts on the first API call). Credentials are compared in constant time.
 
@@ -92,7 +96,9 @@ browser prompts on the first API call). Credentials are compared in constant tim
 All external clients (the Windows watcher, the opencode plugins, the git hooks) read
 the same environment variables — backend URL, TLS/mTLS material, basic-auth
 credentials, origin `host`, display user, task pinning and shadow mode. The table and
-per-client setup live in `plugins/README.md`.
+per-client setup live in `plugins/README.md`. The Windows watcher can also be
+configured in the `watcher` section of `config.yaml`; its environment variables
+override those values.
 
 **Security note:** the `certs/` directory contains private keys. Do not commit
 `.key` or `.p12` files; `certs/` is gitignored by default.

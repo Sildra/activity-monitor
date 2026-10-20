@@ -9,7 +9,7 @@ React/TS/Vite frontend, single server serving the built frontend.
 |------|---------|
 | Run backend | `python -m activity_monitor.main` |
 | Run backend (supervised) | `python supervisor.py` |
-| Run backend + embedded desktop watcher | `python -m activity_monitor.main --watch-windows` |
+| Run backend + embedded desktop watcher | `watcher.enabled: true` in `config.yaml`, then `python -m activity_monitor.main` |
 | Run Windows watcher (standalone) | `python -m activity_monitor.services.windows_watcher` |
 | Build frontend | `cd frontend && npm run build` |
 | Lint backend | `python -m ruff check .` |
@@ -59,7 +59,8 @@ React/TS/Vite frontend, single server serving the built frontend.
   distinct `push` event. Install with `git config core.hooksPath <repo>/plugins/git`.
 - Every client (plugins, hooks, standalone watcher) reads `ACTIVITY_MONITOR_URL` (plus
   mTLS/basic-auth/`ORIGIN`/`DISPLAY_USER` variables and the legacy `ACTIVITY_MONITOR_PORT`,
-  default 8001); the backend also uses it as the port default when `--port` is not passed.
+  default 8001); the standalone watcher uses them as overrides for its `watcher:` config
+  section. The backend takes the port from `general.api_port` only.
 - `pyproject.toml` — metadata, deps, ruff config, hatchling build, scripts `activity-monitor` +
   `activity-monitor-windows`
 - `supervisor.py` — restarts `python -m activity_monitor.main`
@@ -70,26 +71,28 @@ React/TS/Vite frontend, single server serving the built frontend.
   tasks come from `ACTIVITY_MONITOR_TASK` (default `Unknown` — a task is a unit of work, the
   foreground process travels in the event's data). Sleep is detected via
   `QueryUnbiasedInterruptTime` skew and counted as locked, not attention. Standalone it
-  POSTs to `/api/ingest/event` with flags mirroring every client variable plus
-  `--poll`/`--idle-minutes`/`--skew-seconds`/`--heartbeat-seconds` (flag wins over env);
-  embedded it writes straight to the DB via `store_events` (built-in defaults). It emits a
-  `heartbeat` every ~60s while running — liveness only, never stored. `--tray` (watcher and
-  backend) shows a green/red/gray tray icon (`util/tray.py`). Restart after editing.
+  POSTs to `/api/ingest/event`, reading the `watcher:` section of `config.yaml` (client env
+  vars override it; every other section is ignored); embedded it writes straight to the DB
+  via `store_events` when `watcher.enabled` is set. `--run`/`--once` are testing aids;
+  `--config` picks the file. Off Windows both entry points exit silently. `watcher.tray` /
+  `general.tray` show a green/red/gray tray icon (`util/tray.py`). Restart after editing.
 - `tests/` — pytest (`TestClient`, temp config/db)
 
 ## Backend (FastAPI, Python 3.12)
 
 - **Run**: `python -m activity_monitor.main` from repo root. Flags: `--config` (default
-  `config.yaml`), `--database`, `--port` (default from config, 8001), `--openapi FILE`,
-  `--watch-windows` (embed the desktop watcher; or `general.watch_windows` in config),
-  `--tray` (green = the app finished starting, `Exit` stops the server; Windows only —
-  `supervisor.py` forwards argv), `--basic-auth-username`/`--basic-auth-password`.
+  `config.yaml`) and `--openapi FILE` (dev: dump the schema and exit); every other knob —
+  port, database, embedded watcher, tray, SSL, basic auth — lives in the config file.
+  `supervisor.py` forwards argv.
 - **Intentionally minimal**: no services framework, no thread pool, no pipeline engine, no
   statistics. Direct async DB access from handlers. Keep it that way unless there is a real need.
-- **Config**: `AppConfig` dataclass loaded with `yaml.safe_load`; `config.yaml` is committed and
-  holds `general` (api_port, database, optional stale_after_seconds, watch_windows,
-  process_config, basic_auth_username/basic_auth_password). Sources need no configuration
-  (see Ingest).
+- **Config**: `AppConfig` (`general` + `watcher` dataclasses) loaded with `yaml.safe_load`.
+  The file materializes itself: `AppConfig.load` writes a missing file with every default and
+  rewrites one that is missing keys, so `config.yaml` always documents all knobs (rewrites
+  keep values, drop comments/unknown keys). `general` holds the server (api_port, database,
+  stale_after_seconds, tray, ssl_*, basic_auth_*); `watcher` holds the desktop watcher
+  (enabled, tray, sampling thresholds, source/actor/host/task, process_config, standalone
+  connection settings). Sources need no configuration (see Ingest).
 - **Auth**: optional HTTP Basic auth on every `/api/*` route via the `require_auth` dependency
   (`api/deps.py`), mounted by `create_app` only when `general.basic_auth_username` is set.
   Credentials compared with `secrets.compare_digest`; a mismatch returns `401` +

@@ -7,6 +7,7 @@ import json
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Self
 
 import pytest
@@ -313,64 +314,17 @@ def test_explicit_actor_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_parse_args_defaults() -> None:
     args = load_watcher_module().parse_args([])
 
-    assert args.base_url is None
-    assert args.source == "windows"
-    assert args.actor is None
-    assert args.host is None
-    assert args.task is None
-    assert args.username is None
-    assert args.password is None
-    assert args.ca_cert is None
-    assert args.client_cert is None
-    assert args.client_key is None
-    assert args.insecure is False
-    assert args.heartbeat_seconds == 60.0
-    assert args.tray is False
+    assert args.config == Path("config.yaml")
+    assert args.run is None
+    assert args.once is False
 
 
 def test_parse_args_overrides() -> None:
-    args = load_watcher_module().parse_args(
-        [
-            "--base-url",
-            "https://example:9000",
-            "--source",
-            "desktop",
-            "--actor",
-            "sildr",
-            "--host",
-            "laptop",
-            "--task",
-            "JIRA-1",
-            "--username",
-            "alice",
-            "--password",
-            "s3cret",
-            "--ca-cert",
-            "ca.pem",
-            "--client-cert",
-            "client.pem",
-            "--client-key",
-            "client.key",
-            "--heartbeat-seconds",
-            "5",
-            "--tray",
-            "--insecure",
-        ]
-    )
+    args = load_watcher_module().parse_args(["--config", "other.yaml", "--run", "5", "--once"])
 
-    assert args.base_url == "https://example:9000"
-    assert args.source == "desktop"
-    assert args.actor == "sildr"
-    assert args.host == "laptop"
-    assert args.task == "JIRA-1"
-    assert args.username == "alice"
-    assert args.password == "s3cret"
-    assert args.ca_cert == "ca.pem"
-    assert args.client_cert == "client.pem"
-    assert args.client_key == "client.key"
-    assert args.insecure is True
-    assert args.heartbeat_seconds == 5.0
-    assert args.tray is True
+    assert args.config == Path("other.yaml")
+    assert args.run == 5.0
+    assert args.once is True
 
 
 def test_host_option_sets_event_host(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -11,12 +11,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from activity_monitor.main import create_app
+from activity_monitor.services.config import AppConfig
 from activity_monitor.util.time import as_utc
 
 
-def make_client(
-    tmp_path: Path, extra: str = "", stale: int | None = None, basic_auth: tuple[str, str] | None = None
-) -> TestClient:
+def make_client(tmp_path: Path, stale: int | None = None, basic_auth: tuple[str, str] | None = None) -> TestClient:
     general = f"  database: {(tmp_path / 'activity.db').as_posix()}"
 
     if stale is not None:
@@ -27,11 +26,9 @@ def make_client(
         general += f"\n  basic_auth_username: {username}\n  basic_auth_password: {password}"
 
     config = tmp_path / "config.yaml"
-    config.write_text(f"general:\n{general}\n{extra}", encoding="utf-8")
+    config.write_text(f"general:\n{general}\nwatcher:\n  enabled: false\n", encoding="utf-8")
 
-    args = SimpleNamespace(config=config, database=None, port=None, openapi=None)
-
-    return TestClient(create_app(args))
+    return TestClient(create_app(AppConfig.load(config)))
 
 
 def post_event(client: TestClient, source: str, body: dict, **kwargs: object):
@@ -610,7 +607,7 @@ def test_consolidate_removes_empty_trims_and_splits_idle(tmp_path: Path) -> None
 
 
 def test_consolidate_drops_matched_focus_opens(tmp_path: Path) -> None:
-    with make_client(tmp_path, WINDOWS_SOURCE) as client:
+    with make_client(tmp_path) as client:
         db_path = tmp_path / "activity.db"
         t0 = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
@@ -952,11 +949,8 @@ def test_presence_timeline_with_aware_utc_query(tmp_path: Path) -> None:
         assert datetime.fromisoformat(body["end"]) > datetime.fromisoformat(body["start"])
 
 
-WINDOWS_SOURCE = "sources:\n  windows:\n    kind: Push\n    enabled: true\n"
-
-
 def test_user_timeline_reports_focus_lanes_and_states(tmp_path: Path) -> None:
-    with make_client(tmp_path, WINDOWS_SOURCE) as client:
+    with make_client(tmp_path) as client:
         t0 = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 
@@ -1020,7 +1014,7 @@ def test_user_timeline_reports_focus_lanes_and_states(tmp_path: Path) -> None:
 
 
 def test_user_timeline_open_span_clipped_when_watcher_stops(tmp_path: Path) -> None:
-    with make_client(tmp_path, WINDOWS_SOURCE) as client:
+    with make_client(tmp_path) as client:
         t0 = datetime(2026, 10, 1, 9, 0, 0, tzinfo=UTC)
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 
@@ -1038,7 +1032,7 @@ def test_user_timeline_open_span_clipped_when_watcher_stops(tmp_path: Path) -> N
 
 
 def test_user_timeline_open_span_stays_live_with_recent_events(tmp_path: Path) -> None:
-    with make_client(tmp_path, WINDOWS_SOURCE) as client:
+    with make_client(tmp_path) as client:
         t0 = datetime(2026, 10, 1, 9, 0, 0, tzinfo=UTC)
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 
@@ -1065,7 +1059,7 @@ def test_user_timeline_open_span_stays_live_with_recent_events(tmp_path: Path) -
 
 
 def test_windows_heartbeats_are_not_stored(tmp_path: Path) -> None:
-    with make_client(tmp_path, WINDOWS_SOURCE) as client:
+    with make_client(tmp_path) as client:
         t0 = datetime(2026, 10, 1, 9, 0, 0, tzinfo=UTC)
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 
@@ -1084,7 +1078,7 @@ def test_windows_heartbeats_are_not_stored(tmp_path: Path) -> None:
 
 
 def test_tasks_merges_windows_focus_spans(tmp_path: Path) -> None:
-    with make_client(tmp_path, WINDOWS_SOURCE) as client:
+    with make_client(tmp_path) as client:
         t0 = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
         fmt = lambda dt: dt.isoformat(" ", timespec="microseconds")
 

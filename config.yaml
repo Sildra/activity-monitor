@@ -1,3 +1,32 @@
 general:
   api_port: 8001
   database: activity.db
+  stale_after_seconds: 300
+  tray: false
+  ssl_enabled: false
+  ssl_certfile: null
+  ssl_keyfile: null
+  ssl_ca_certs: null
+  ssl_cert_reqs: none
+  basic_auth_username: null
+  basic_auth_password: null
+watcher:
+  enabled: false
+  tray: false
+  source: windows
+  actor: null
+  host: null
+  task: null
+  process_config: null
+  poll: 1.0
+  idle_minutes: 2.0
+  skew_seconds: 30.0
+  heartbeat_seconds: 60.0
+  verbose: false
+  base_url: null
+  username: null
+  password: null
+  ca_cert: null
+  client_cert: null
+  client_key: null
+  insecure: false

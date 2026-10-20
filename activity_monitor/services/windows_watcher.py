@@ -32,13 +32,18 @@ suspended span is reported as a lock rather than as attention.
 Events are idempotent: each carries a unique `id` so re-sends (retries, watcher
 restarts) dedupe on the server.
 
-Two ways to run it:
+Two ways to run it, both driven by the `watcher` section of `config.yaml`
+(the file writes itself with defaults when missing; the client environment
+variables override it):
 
-- **Standalone**: `python -m activity_monitor.services.windows_watcher [--base-url ...]`
-  POSTs each event to the running backend's ingest endpoint (`--tray` adds a
-  tray icon showing the backend connection state while it runs).
-- **Embedded**: the backend starts it in-process (see `--watch-windows` /
-  `general.watch_windows`) and events are written straight to the database.
+- **Standalone**: `python -m activity_monitor.services.windows_watcher`
+  POSTs each event to the running backend's ingest endpoint (`watcher.tray`
+  adds a tray icon showing the backend connection state while it runs).
+- **Embedded**: the backend starts it in-process when `watcher.enabled` is
+  set and events are written straight to the database.
+
+Only Windows has an implementation; on any other OS both entry points exit
+silently instead of failing.
 """
 
 from __future__ import annotations
@@ -47,7 +52,6 @@ import argparse
 import asyncio
 import base64
 import ctypes
-import ctypes.wintypes as wt
 import json
 import os
 import socket
@@ -57,59 +61,69 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib import request
 
+from activity_monitor.services.config import (
+    DEFAULT_HEARTBEAT_SECONDS,
+    DEFAULT_IDLE_MINUTES,
+    DEFAULT_POLL_SECONDS,
+    DEFAULT_SKEW_SECONDS,
+    DEFAULT_SOURCE,
+    AppConfig,
+)
 from activity_monitor.util.process_config import ProcessConfigError, ProcessRule, apply_rules, load_process_config
-from activity_monitor.util.tray import TrayIcon
 
 if TYPE_CHECKING:
     from activity_monitor.services.sources import SourceProvider
+    from activity_monitor.util.tray import TrayIcon
+
+IS_WINDOWS = os.name == "nt"
+"""Only Windows has an implementation (Win32 via ctypes); off Windows the module
+still imports and both entry points do nothing."""
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 DESKTOP_SWITCHDESKTOP = 0x0100
 UOI_NAME = 2
 
-user32 = ctypes.WinDLL("user32", use_last_error=True)
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+if IS_WINDOWS:
+    import ctypes.wintypes as wt
 
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
-class LASTINPUTINFO(ctypes.Structure):
-    _fields_ = [("cbSize", wt.DWORD), ("dwTime", wt.DWORD)]
+    class LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wt.DWORD), ("dwTime", wt.DWORD)]
 
+    user32.GetForegroundWindow.restype = wt.HWND
+    user32.GetForegroundWindow.argtypes = []
+    user32.GetWindowTextW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    user32.GetWindowThreadProcessId.restype = wt.DWORD
+    user32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+    user32.GetLastInputInfo.restype = wt.BOOL
+    user32.GetLastInputInfo.argtypes = [ctypes.POINTER(LASTINPUTINFO)]
+    user32.OpenInputDesktop.restype = wt.HANDLE
+    user32.OpenInputDesktop.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+    user32.GetUserObjectInformationW.restype = wt.BOOL
+    user32.GetUserObjectInformationW.argtypes = [wt.HANDLE, ctypes.c_int, wt.LPVOID, wt.DWORD, ctypes.POINTER(wt.DWORD)]
 
-user32.GetForegroundWindow.restype = wt.HWND
-user32.GetForegroundWindow.argtypes = []
-user32.GetWindowTextW.restype = ctypes.c_int
-user32.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
-user32.GetWindowThreadProcessId.restype = wt.DWORD
-user32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
-user32.GetLastInputInfo.restype = wt.BOOL
-user32.GetLastInputInfo.argtypes = [ctypes.POINTER(LASTINPUTINFO)]
-user32.OpenInputDesktop.restype = wt.HANDLE
-user32.OpenInputDesktop.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
-user32.GetUserObjectInformationW.restype = wt.BOOL
-user32.GetUserObjectInformationW.argtypes = [wt.HANDLE, ctypes.c_int, wt.LPVOID, wt.DWORD, ctypes.POINTER(wt.DWORD)]
-
-kernel32.GetTickCount.restype = wt.DWORD
-kernel32.GetTickCount.argtypes = []
-kernel32.OpenProcess.restype = wt.HANDLE
-kernel32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
-kernel32.QueryFullProcessImageNameW.restype = wt.BOOL
-kernel32.QueryFullProcessImageNameW.argtypes = [wt.HANDLE, wt.DWORD, wt.LPWSTR, ctypes.POINTER(wt.DWORD)]
-kernel32.CloseHandle.restype = wt.BOOL
-kernel32.CloseHandle.argtypes = [wt.HANDLE]
-kernel32.QueryUnbiasedInterruptTime.restype = wt.BOOL
-kernel32.QueryUnbiasedInterruptTime.argtypes = [ctypes.POINTER(ctypes.c_ulonglong)]
+    kernel32.GetTickCount.restype = wt.DWORD
+    kernel32.GetTickCount.argtypes = []
+    kernel32.OpenProcess.restype = wt.HANDLE
+    kernel32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+    kernel32.QueryFullProcessImageNameW.restype = wt.BOOL
+    kernel32.QueryFullProcessImageNameW.argtypes = [wt.HANDLE, wt.DWORD, wt.LPWSTR, ctypes.POINTER(wt.DWORD)]
+    kernel32.CloseHandle.restype = wt.BOOL
+    kernel32.CloseHandle.argtypes = [wt.HANDLE]
+    kernel32.QueryUnbiasedInterruptTime.restype = wt.BOOL
+    kernel32.QueryUnbiasedInterruptTime.argtypes = [ctypes.POINTER(ctypes.c_ulonglong)]
 
 EventSink = Callable[[dict[str, Any]], bool]
 
-DEFAULT_PORT = "8001"
-DEFAULT_SKEW_SECONDS = 30.0
-# How often the watcher emits a `heartbeat` liveness event while it runs. The
-# server extends an open focus/idle/lock span only while events keep arriving,
-# so the ping keeps it live without spamming when the state is unchanged.
-DEFAULT_HEARTBEAT_SECONDS = 60.0
+# Sampling defaults and the heartbeat cadence live in services.config, which is
+# where both apps read the watcher's settings from.
 
 
 def default_base_url() -> str:
@@ -354,12 +368,12 @@ class WindowsWatcher:
         self,
         sink: EventSink,
         *,
-        source: str = "windows",
+        source: str = DEFAULT_SOURCE,
         actor: str | None = None,
         host: str | None = None,
         task: str | None = None,
-        poll: float = 1.0,
-        idle_minutes: float = 2.0,
+        poll: float = DEFAULT_POLL_SECONDS,
+        idle_minutes: float = DEFAULT_IDLE_MINUTES,
         skew_seconds: float = DEFAULT_SKEW_SECONDS,
         heartbeat: float = DEFAULT_HEARTBEAT_SECONDS,
         verbose: bool = False,
@@ -605,6 +619,10 @@ class WindowsWatcher:
         self.flush()
 
     def run(self, once: bool = False, until: datetime | None = None, stop: threading.Event | None = None) -> None:
+        if not IS_WINDOWS:
+            # The probes are Windows-only; stay a quiet no-op elsewhere.
+            return
+
         print(f"[watcher] watching '{self.source}' (poll {self.poll}s)", flush=True)
 
         try:
@@ -632,8 +650,10 @@ def start_database_watcher(
     loop: asyncio.AbstractEventLoop,
     source: str | None = None,
     actor: str | None = None,
-    poll: float = 1.0,
-    idle_minutes: float = 2.0,
+    host: str | None = None,
+    task: str | None = None,
+    poll: float = DEFAULT_POLL_SECONDS,
+    idle_minutes: float = DEFAULT_IDLE_MINUTES,
     skew_seconds: float = DEFAULT_SKEW_SECONDS,
     heartbeat: float = DEFAULT_HEARTBEAT_SECONDS,
     verbose: bool = False,
@@ -645,6 +665,8 @@ def start_database_watcher(
         DatabaseSink(loop, provider),
         source=source or provider.name,
         actor=actor,
+        host=host,
+        task=task,
         poll=poll,
         idle_minutes=idle_minutes,
         skew_seconds=skew_seconds,
@@ -660,111 +682,87 @@ def start_database_watcher(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--base-url",
-        default=None,
-        help=f"activity monitor backend root (default $ACTIVITY_MONITOR_PORT, currently {default_base_url()})",
-    )
-    parser.add_argument("--source", default="windows", help="source name to push under (must exist as Push)")
-    parser.add_argument("--actor", default=None, help="event actor (default $ACTIVITY_MONITOR_DISPLAY_USER or 'user')")
-    parser.add_argument(
-        "--host", default=None, help="origin host on events (default $ACTIVITY_MONITOR_ORIGIN or the OS hostname)"
+    parser = argparse.ArgumentParser(
+        description="Standalone desktop watcher: samples focus / idle / lock and pushes the events over HTTP"
     )
     parser.add_argument(
-        "--task", default=None, help="task stamped on focus events (default $ACTIVITY_MONITOR_TASK, else Unknown)"
-    )
-    parser.add_argument(
-        "--username", default=None, help="HTTP Basic auth username (default $ACTIVITY_MONITOR_USERNAME)"
-    )
-    parser.add_argument(
-        "--password", default=None, help="HTTP Basic auth password (default $ACTIVITY_MONITOR_PASSWORD)"
-    )
-    parser.add_argument(
-        "--ca-cert", default=None, help="CA bundle used to verify the server (default $ACTIVITY_MONITOR_CA_CERT)"
-    )
-    parser.add_argument(
-        "--client-cert", default=None, help="client certificate for mTLS (default $ACTIVITY_MONITOR_CLIENT_CERT)"
-    )
-    parser.add_argument(
-        "--client-key", default=None, help="client private key for mTLS (default $ACTIVITY_MONITOR_CLIENT_KEY)"
-    )
-    parser.add_argument("--insecure", action="store_true", help="skip TLS verification (development only)")
-    parser.add_argument("--poll", type=float, default=1.0, help="sample interval in seconds")
-    parser.add_argument("--idle-minutes", type=float, default=2.0, help="idle threshold in minutes")
-    parser.add_argument(
-        "--skew-seconds",
-        type=float,
-        default=DEFAULT_SKEW_SECONDS,
-        help="wall-clock skew above this many seconds is reported as the machine sleeping",
-    )
-    parser.add_argument(
-        "--heartbeat-seconds",
-        type=float,
-        default=DEFAULT_HEARTBEAT_SECONDS,
-        help="emit a liveness ping this often so the server knows the watcher is still running "
-        "(pings are kept in memory, never stored as events)",
-    )
-    parser.add_argument(
-        "--process-config",
-        default=os.environ.get("ACTIVITY_MONITOR_PROCESS_CONFIG"),
-        help="YAML file of process input/output couples renaming or redacting focus events "
-        "(default $ACTIVITY_MONITOR_PROCESS_CONFIG)",
+        "--config",
+        type=Path,
+        default=Path("config.yaml"),
+        help="Configuration file (written with full defaults if missing); only its `watcher` section is read",
     )
     parser.add_argument("--run", type=float, default=None, help="exit after N seconds (testing)")
     parser.add_argument("--once", action="store_true", help="sample once and exit (testing)")
-    parser.add_argument("--tray", action="store_true", help="show a tray icon with the backend connection state")
-    parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
+    if not IS_WINDOWS:
+        # The desktop watcher is only implemented on Windows; exit quietly so
+        # the same entry point (and config file) works on every OS.
+        return 0
+
     args = parse_args(argv)
+    settings = AppConfig.load(args.config).watcher  # standalone: only the `watcher` section matters
 
     process_rules: list[ProcessRule] = []
+    process_config = settings.process_config or os.environ.get("ACTIVITY_MONITOR_PROCESS_CONFIG")
 
-    if args.process_config:
+    if process_config:
         try:
-            process_rules = load_process_config(args.process_config)
+            process_rules = load_process_config(process_config)
         except ProcessConfigError as error:
             print(f"[watcher] process config: {error}", file=sys.stderr)
             return 1
 
-    base_url = args.base_url or default_base_url()
+    # The config file is the base; the documented client env vars override it.
+    base_url = (os.environ.get("ACTIVITY_MONITOR_URL") or settings.base_url or default_base_url()).rstrip("/")
+    actor = os.environ.get("ACTIVITY_MONITOR_DISPLAY_USER") or settings.actor
+    host = os.environ.get("ACTIVITY_MONITOR_ORIGIN") or settings.host
+    task = os.environ.get("ACTIVITY_MONITOR_TASK") or settings.task
+    username = os.environ.get("ACTIVITY_MONITOR_USERNAME") or settings.username
+    password = os.environ.get("ACTIVITY_MONITOR_PASSWORD") or settings.password
+    cafile = os.environ.get("ACTIVITY_MONITOR_CA_CERT") or settings.ca_cert
+    certfile = os.environ.get("ACTIVITY_MONITOR_CLIENT_CERT") or settings.client_cert
+    keyfile = os.environ.get("ACTIVITY_MONITOR_CLIENT_KEY") or settings.client_key
+    insecure = settings.insecure or os.environ.get("ACTIVITY_MONITOR_INSECURE", "").lower() in ("1", "true", "yes")
+
     stop = threading.Event()
     tray: TrayIcon | None = None
 
-    if args.tray:
+    if settings.tray:
+        from activity_monitor.util.tray import TrayIcon
+
         # The tray icon reports the sink's delivery result, and its Exit entry
         # stops the watcher loop.
-        tray = TrayIcon(f"Activity Monitor — {base_url.rstrip('/')}", on_exit=stop.set)
+        tray = TrayIcon(f"Activity Monitor — {base_url}", on_exit=stop.set)
         tray.start()
 
     sink = HttpSink(
         base_url,
-        args.source,
-        username=args.username,
-        password=args.password,
-        cafile=args.ca_cert,
-        certfile=args.client_cert,
-        keyfile=args.client_key,
-        insecure=args.insecure,
+        settings.source,
+        username=username,
+        password=password,
+        cafile=cafile,
+        certfile=certfile,
+        keyfile=keyfile,
+        insecure=insecure,
         on_status=tray.set_state if tray is not None else None,
     )
     watcher = WindowsWatcher(
         sink,
-        source=args.source,
-        actor=args.actor,
-        host=args.host,
-        task=args.task,
-        poll=args.poll,
-        idle_minutes=args.idle_minutes,
-        skew_seconds=args.skew_seconds,
-        heartbeat=args.heartbeat_seconds,
-        verbose=args.verbose,
+        source=settings.source,
+        actor=actor,
+        host=host,
+        task=task,
+        poll=settings.poll,
+        idle_minutes=settings.idle_minutes,
+        skew_seconds=settings.skew_seconds,
+        heartbeat=settings.heartbeat_seconds,
+        verbose=settings.verbose,
         process_rules=process_rules,
     )
-    print(f"[watcher] pushing '{args.source}' events to {base_url.rstrip('/')}", flush=True)
+    print(f"[watcher] pushing '{settings.source}' events to {base_url}", flush=True)
 
     try:
         until = datetime.now(UTC) + timedelta(seconds=args.run) if args.run is not None else None

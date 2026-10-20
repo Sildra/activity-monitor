@@ -24,7 +24,7 @@ def require_auth(request: Request, credentials: Annotated[HTTPBasicCredentials |
     `general.basic_auth_username` is set; the static frontend and the OpenAPI
     docs stay public.
     """
-    config = request.app.state.config
+    config = request.app.state.config.general
     username = config.basic_auth_username
 
     if not username:
@@ -42,4 +42,4 @@ def require_auth(request: Request, credentials: Annotated[HTTPBasicCredentials |
 
 
 def stale_after(request: Request) -> timedelta:
-    return timedelta(seconds=request.app.state.config.stale_after_seconds)
+    return timedelta(seconds=request.app.state.config.general.stale_after_seconds)
