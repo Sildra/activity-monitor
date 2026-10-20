@@ -214,6 +214,7 @@ export default Plugin.define({
         const connection = { state: "pending" as ConnectionState, message: "" };
         let emitState: ((data: { state: string; message: string }) => void) | undefined;
         let emitTask: ((data: { sessionID: string; task: string }) => void) | undefined;
+        let emitToast: ((data: Record<string, unknown>) => void) | undefined;
         let publishedState = "";
 
         const currentState = (): { state: string; message: string } =>
@@ -234,9 +235,22 @@ export default Plugin.define({
         };
 
         const setConnection = (state: ConnectionState, message: string): void => {
+            const previous = connection.state;
+
             connection.state = state;
             connection.message = message;
             publishState();
+
+            // Only toast on a real flip between ok and error — a dead monitor is
+            // reported once, not on every heartbeat, and the startup `pending`
+            // never counts as a transition. Single line, no title, so it stays
+            // out of the way.
+            if (previous !== state && previous !== "pending" && (state === "ok" || state === "error")) {
+                emitToast?.({
+                    message: state === "ok" ? "Monitor connected" : "Monitor down",
+                    variant: state === "ok" ? "success" : "error",
+                });
+            }
         };
 
         let lastError = "";
@@ -271,6 +285,10 @@ export default Plugin.define({
 
             emitTask = (data) => {
                 void registration.events.emit("task", data);
+            };
+
+            emitToast = (data) => {
+                void registration.events.emit("toast", data);
             };
         } catch (error) {
             report(`rpc registration failed: ${(error as Error).message}`);
@@ -362,8 +380,10 @@ export default Plugin.define({
             void beat();
         }, opts.heartbeatMs ?? 60_000);
 
-        // V2 has no `session.error` event (it was a V1 legacy type): the idle event is
-        // the completion signal, so a finished prompt always reports status "completed".
+        // A turn completes on an execution outcome; V2 reports it as
+        // `session.execution.succeeded`/`.failed`/`.interrupted`. `session.idle`
+        // (legacy) and `session.status` with `status.type === "idle"` are kept as
+        // fallbacks for builds that still emit them. V2 has no `session.error`.
         const controller = new AbortController();
 
         void (async () => {
@@ -534,11 +554,28 @@ export default Plugin.define({
                         continue;
                     }
 
-                    if (event.type !== "session.idle") {
+                    // A turn is over on an execution outcome (V2's signal);
+                    // `session.idle` (legacy) and `session.status` idle are kept
+                    // as fallbacks for other builds. Anything else (a streamed
+                    // text delta, `execution.started`, ...) is not a completion.
+                    const completion =
+                        event.type === "session.execution.succeeded"
+                            ? { sessionID: event.data.sessionID, status: "completed" }
+                            : event.type === "session.execution.failed"
+                              ? { sessionID: event.data.sessionID, status: "failed" }
+                              : event.type === "session.execution.interrupted"
+                                ? { sessionID: event.data.sessionID, status: "interrupted" }
+                                : event.type === "session.idle"
+                                  ? { sessionID: event.data.sessionID, status: "completed" }
+                                  : event.type === "session.status" && event.data.status.type === "idle"
+                                    ? { sessionID: event.data.sessionID, status: "completed" }
+                                    : undefined;
+
+                    if (completion === undefined) {
                         continue;
                     }
 
-                    const sessionID = event.data.sessionID;
+                    const sessionID = completion.sessionID;
 
                     if (shadowTurns.delete(sessionID)) {
                         publishState();
@@ -572,10 +609,10 @@ export default Plugin.define({
                         timestamp: new Date(done).toISOString(),
                         actor: opts.actor,
                         task: record.task,
-                        title: `done: ${record.title}`,
+                        title: `${completion.status === "completed" ? "done" : completion.status}: ${record.title}`,
                         duration_ms: done - record.start,
                         tags: ["opencode", "prompt"],
-                        data: { sessionID, messageID: record.messageID, status: "completed" },
+                        data: { sessionID, messageID: record.messageID, status: completion.status },
                         program: programEvents(),
                     });
                 }
@@ -601,7 +638,16 @@ export default Plugin.define({
                 shadowPermanent.has(event.sessionID);
 
             if (turnShadowed) {
-                shadowTurns.add(event.sessionID);
+                // Only a real turn is a shadow turn: the idle event that clears it
+                // never arrives for an empty prompt, so an empty one must not add a
+                // sticky entry (an active permanent shadow already keeps the
+                // session shadowed by itself).
+                if (text) {
+                    shadowTurns.add(event.sessionID);
+                    publishState();
+                }
+            } else if (shadowTurns.delete(event.sessionID)) {
+                // A new, reported turn means any earlier shadow turn is over.
                 publishState();
             }
 
@@ -706,18 +752,35 @@ export default Plugin.define({
                     const text = input.prompt.text.replace(/^\s*\/shadow\b\s*/i, "").trim();
 
                     if (!text) {
-                        if (shadowPermanent.has(input.sessionID)) {
-                            shadowPermanent.delete(input.sessionID);
-                        } else {
+                        const enabling = !shadowPermanent.has(input.sessionID);
+
+                        if (enabling) {
                             shadowPermanent.add(input.sessionID);
+                        } else {
+                            shadowPermanent.delete(input.sessionID);
+                            // A shadow turn recorded while the permanent shadow was
+                            // on would otherwise keep the derived state at `shadow`
+                            // after it is switched off (its idle event may never
+                            // arrive on V2).
+                            shadowTurns.delete(input.sessionID);
                         }
 
                         publishState();
+
+                        emitToast?.({
+                            message: enabling ? "Shadow on" : "Shadow off",
+                            variant: enabling ? "warning" : "success",
+                        });
 
                         return;
                     }
 
                     shadowSessions.add(input.sessionID);
+
+                    emitToast?.({
+                        message: "Shadow on (this prompt)",
+                        variant: "info",
+                    });
 
                     // Safety net: if the prompt hook never consumes the marker, drop it so a
                     // later prompt in this session is not silently shadowed.

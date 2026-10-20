@@ -165,13 +165,15 @@ real command whose executor does not submit a prompt, so the model never runs
 Run `/shadow <prompt>` to send one prompt without reporting it to the Activity
 Monitor: the prompt still runs, but no `prompt.begin`/`prompt.end` (or any other)
 event is sent for that turn. The plugin strips the `/shadow` prefix in the prompt
-hook (V2) or message hook (V1), so the model receives the real text.
+hook (V2) or message hook (V1), so the model receives the real text. The TUI shows
+a short toast confirming the prompt is being shadowed.
 
 Run `/shadow` with no argument to toggle a permanent shadow for that session:
 while it is on, nothing the session produces is reported (prompts, permission
 and question events, task changes) and the TUI indicator shows `shadow`; run
 `/shadow` again to turn it off. The bare command submits no prompt, so no model
-turn happens.
+turn happens. Each toggle also shows a toast (warning when switching on,
+success when switching off), so the current state is never a guess.
 
 Set `ACTIVITY_MONITOR_SHADOW=1` (also `true`/`yes`/`on`) to do the same for the
 whole session: the plugin becomes completely silent and sends nothing to the
@@ -201,9 +203,12 @@ V2 implementation notes:
 
 - `prompt.begin` is recorded in the `ctx.session.hook("prompt", ...)` hook (it
   runs on incoming prompts; `messageID` is available for the dedupe id).
-- `prompt.end` is recorded from the `session.idle` event on
-  `ctx.event.subscribe(...)`. V2 has no `session.error` event, so a finished
-  prompt always reports status `completed`.
+- `prompt.end` is recorded from the turn-completion event on
+  `ctx.event.subscribe(...)`: `session.execution.succeeded` / `.failed` /
+  `.interrupted` (the status in `data.status` follows the outcome, so a failed or
+  interrupted turn is reported as such). `session.idle` and `session.status`
+  with `status.type === "idle"` are accepted as fallbacks for builds that still
+  emit them. V2 has no `session.error` event.
 - `permission.asked` / `permission.replied` come from the same
   `ctx.event.subscribe(...)` stream; the ask is paired to its reply by request id
   to compute the wait duration.
@@ -211,7 +216,10 @@ V2 implementation notes:
   `form.replied` and `form.cancelled` events on the same stream; the question
   tool tags its form with `metadata.kind === "question"`, so unrelated forms are
   ignored, and replies are paired to the ask by form id.
-- V2 has no server-side toast API, so plugin errors only reach opencode's logs.
+- V2 has no toast API in the *server* plugin, so plugin errors only reach
+  opencode's logs. Transient *user-facing* messages (the `/shadow` toasts) are
+  routed to the TUI half over the plugin RPC contract (`rpc.ts` defines a `toast`
+  event, and `tui.tsx` shows it with `context.ui.toast.show`).
 - The plugin folder pins `@opencode/plugin` in `package.json` so editors can
   type-check it (`npm install` in the folder); the runtime resolves the package
   itself. The TUI half additionally needs the `@opentui/core` / `@opentui/solid`
@@ -241,10 +249,11 @@ The task is left out until one is pinned (`/task` with no id clears it again).
 
 The state and the task live in the server half of the plugin (`index.ts`), which
 updates them on every `POST` and on `/task`, and publishes them over the plugin
-RPC contract in `rpc.ts` (a `status` and a `task` method, plus a `state` and a
-`task` event). `tui.tsx` — the package's `./tui` entry, which the OpenCode CLI
-loads automatically because the plugin directory is in `opencode.json` —
-subscribes to that RPC and renders the indicator. The server half can finish
+RPC contract in `rpc.ts` (a `status` and a `task` method, plus `state`, `task`
+and `toast` events). `tui.tsx` — the package's `./tui` entry, which the OpenCode
+CLI loads automatically because the plugin directory is in `opencode.json` —
+subscribes to that RPC and renders the indicator, and shows the `toast` events as
+transient toasts (`context.ui.toast.show`). The server half can finish
 reporting before the TUI half subscribes, so the TUI also seeds the current
 state once with `status`, and each session's task the first time it renders that
 session; those calls name the TUI's location and pass the methods' required
@@ -343,7 +352,12 @@ Two hooks register git activity with the monitor, both POSTing to
 and both always exiting `0`, so a stopped monitor never blocks a commit or push.
 
 - **`post-commit`** — on every commit, registers the **repository**, **current
-  branch**, **commit id**, author, timestamp and subject.
+  branch**, **commit id**, author, timestamp, subject and the commit's **diff
+  summary** (`git show --stat`, capped in width and file count). The backend
+  keeps the block in `data.stat`, the paths in `data.files` and the parsed
+  counts in `data.insertions` / `data.deletions`, and appends a compact
+  `N files, +x/-y` to the event's detail. A commit with no summary (e.g. a
+  merge) stores none of it.
 - **`pre-push`** — on every `git push`, registers each pushed ref as a distinct
   `push` event with the **remote**, **branch**, **commit id** and the previous
   (remote) sha. Git has no post-push hook, so it runs just before the transfer;

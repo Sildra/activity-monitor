@@ -12,6 +12,10 @@ import { Rpc } from "@opencode/plugin/rpc";
  * is running without reporting, i.e. `ACTIVITY_MONITOR_SHADOW` or a `/shadow`
  * turn). The task is the id a session pinned with `/task`, or `""` when it has
  * none.
+ *
+ * The `toast` event carries a transient message for the TUI to surface (V2 has
+ * no server-side toast API, so the server half routes it through the TUI half,
+ * which owns `context.ui.toast.show`).
  */
 export const ActivityMonitor = Rpc.define({
     id: "activity-monitor",
@@ -63,6 +67,19 @@ export const ActivityMonitor = Rpc.define({
                     task: { type: "string" },
                 },
                 required: ["sessionID", "task"],
+                additionalProperties: false,
+            },
+        },
+        toast: {
+            schema: {
+                type: "object",
+                properties: {
+                    title: { type: "string" },
+                    message: { type: "string" },
+                    variant: { type: "string", enum: ["info", "success", "warning", "error"] },
+                    sessionID: { type: "string" },
+                },
+                required: ["message", "variant"],
                 additionalProperties: false,
             },
         },

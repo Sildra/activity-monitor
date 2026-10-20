@@ -64,6 +64,38 @@ export default Plugin.define({
             }
         });
 
+        // V2 has no server-side toast API, so the server half routes transient
+        // messages (`/shadow` toggles, ...) over the RPC contract and this half
+        // shows them.
+        const asToastVariant = (value: unknown): "info" | "success" | "warning" | "error" =>
+            value === "success" || value === "warning" || value === "error" ? value : "info";
+
+        // One uniform content width for every toast: short messages are
+        // right-padded with spaces so all of them render the same, slightly
+        // larger line. Trailing whitespace survives as text padding.
+        const contentWidth = 35;
+
+        const unsubscribeToast = rpc.events.on("toast", (event) => {
+            const data = (event.data ?? {}) as Record<string, unknown>;
+            const message = typeof data.message === "string" ? data.message : "";
+
+            if (message === "") {
+                return;
+            }
+
+            // No default title: the server half sends a single short line, and
+            // an extra heading would make the toast far more intrusive.
+            const title = typeof data.title === "string" && data.title !== "" ? data.title : undefined;
+            const sessionID = typeof data.sessionID === "string" && data.sessionID !== "" ? data.sessionID : undefined;
+
+            context.ui.toast.show({
+                message: message.padEnd(contentWidth, " "),
+                variant: asToastVariant(data.variant),
+                ...(title === undefined ? {} : { title }),
+                ...(sessionID === undefined ? {} : { sessionID }),
+            });
+        });
+
         // The server plugin may have reported before this plugin subscribed, so
         // seed the current values once (best effort). The RPC domain is registered
         // for the location its server half was loaded in, so the calls have to
@@ -141,6 +173,7 @@ export default Plugin.define({
         return () => {
             unsubscribe();
             unsubscribeTask();
+            unsubscribeToast();
             unregisterSidebar();
         };
     },

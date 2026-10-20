@@ -36,7 +36,9 @@ React/TS/Vite frontend, single server serving the built frontend.
   `/api/ingest/opencode` with a top-level `program: { id, source, host }` so the presence timeline
   can pin them to a lane (enabled via `opencode.json`; deterministic SHA-1 ids so re-sends dedupe).
   `prompt.begin` is recorded in the `ctx.session.hook("prompt", ...)` hook; `prompt.end` comes from
-  the `session.idle` event on `ctx.event.subscribe(...)` (V2 has no `session.error` event). The
+  the turn-completion event on `ctx.event.subscribe(...)` — `session.execution.succeeded` /
+  `.failed` / `.interrupted` (V2 emits no `session.idle`/`session.status` idle for it; those are
+  only kept as fallbacks). The
   `/task <id>` command is registered by the plugin via `ctx.command.transform` — its executor never
   submits a prompt, so no model turn happens; it records a `task.set` event and pins subsequent
   prompts of that session to the id (a `sessionTasks` map; `/task` alone clears it). Before any
@@ -57,7 +59,8 @@ React/TS/Vite frontend, single server serving the built frontend.
   throwing), since V1 has no server↔TUI RPC bridge.
   `index.ts` also tracks the connection state
   (`pending`/`ok`/`error`, or `shadow` while silent) and each session's `/task` id, publishing both
-  over the plugin RPC contract in `rpc.ts` (`status`/`task` methods + `state`/`task` events);
+  over the plugin RPC contract in `rpc.ts` (`status`/`task` methods + `state`/`task`/`toast`
+  events);
   `tui.tsx` (the package's `./tui` entry, loaded by the CLI automatically) subscribes to them and
   renders a single coloured `● Activity Monitor (<task>) <state>` row in the TUI sidebar
   (`sidebar.content`, below the built-in MCP and Context sections) — green = last request succeeded,
