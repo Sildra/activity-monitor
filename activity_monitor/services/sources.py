@@ -25,38 +25,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from activity_monitor.config import AppConfig
-
-
-def _to_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        value = value.astimezone()
-
-    return value.astimezone(UTC)
-
-
-def parse_timestamp(value: Any) -> datetime | None:
-    if value is None or value == "":
-        return None
-
-    if isinstance(value, datetime):
-        return _to_utc(value)
-
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC)
-
-    if isinstance(value, str):
-        text = value.strip()
-        try:
-            return datetime.fromtimestamp(int(text), tz=UTC)
-        except ValueError:
-            pass
-        try:
-            return _to_utc(datetime.fromisoformat(text))
-        except ValueError:
-            return None
-
-    return None
+from activity_monitor.services.config import AppConfig
+from activity_monitor.util.time import parse_timestamp
 
 
 def dedup(*parts: Any) -> str:
@@ -75,6 +45,9 @@ def local_host() -> str:
 
 UNKNOWN_TASK = "Unknown"
 """Default task stamped by producers on work they cannot attribute (no task pinned yet)."""
+
+USER_SOURCE = "windows"
+"""Source name of the desktop watcher, shared by its events and the timelines over them."""
 
 
 def derive_task(*candidates: str | None) -> str | None:
@@ -203,7 +176,7 @@ class SourceProvider(ABC):
         self.name = name
         self.settings = settings
         # Latest liveness ping (`heartbeat` record) seen from this source. Pings
-        # are not persisted as events (see `api.store_events`); they only tell
+        # are not persisted as events (see `services.events.store_events`); they only tell
         # the user timeline that a watcher is still reporting.
         self.last_heartbeat: datetime | None = None
 

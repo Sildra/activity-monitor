@@ -7,7 +7,12 @@ from typing import Any
 
 import pytest
 
-from activity_monitor.process_config import ProcessConfigError, apply_rules, load_process_config, parse_process_config
+from activity_monitor.util.process_config import (
+    ProcessConfigError,
+    apply_rules,
+    load_process_config,
+    parse_process_config,
+)
 
 
 def parse(process: Any) -> list[Any]:

@@ -44,7 +44,7 @@ async def _ensure_columns(connection) -> None:
 async def init(database: str) -> None:
     global _engine, _sessionmaker, _database_path
 
-    from activity_monitor import models  # noqa: F401  (registers tables with SQLModel metadata)
+    from activity_monitor.model import event, program  # noqa: F401  (registers tables with SQLModel metadata)
 
     _database_path = Path(database)
     _engine = create_async_engine(f"sqlite+aiosqlite:///{_database_path}", echo=False)

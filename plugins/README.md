@@ -302,7 +302,7 @@ visible. As with V2, nothing about it is sent to the Activity Monitor.
 
 ## Standalone Windows monitor
 
-`../activity_monitor/windows_watcher.py` samples the foreground window, input-idle
+`../activity_monitor/services/windows_watcher.py` samples the foreground window, input-idle
 time and lock state, and pushes `focus` / `idle.start` / `idle.end` / `lock` /
 `unlock` events to the `windows` Push source. It is `ctypes`-only (no extra
 dependencies) and windows-only.
@@ -319,14 +319,14 @@ Set `ACTIVITY_MONITOR_URL` (or legacy vars) and run it from the repo root:
 
 ```bash
 $env:ACTIVITY_MONITOR_URL="https://localhost:8001"
-python -m activity_monitor.windows_watcher
+python -m activity_monitor.services.windows_watcher
 ```
 
 It defaults to `http://127.0.0.1:8001` if no URL is set. Every environment
 variable above has a matching flag, and the flag wins when both are set:
 
 ```bash
-python -m activity_monitor.windows_watcher \
+python -m activity_monitor.services.windows_watcher \
     --base-url https://localhost:8001 --source windows \
     --actor sildr --host laptop --task JIRA-1 \
     --username alice --password s3cret \

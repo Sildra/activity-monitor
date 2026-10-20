@@ -34,7 +34,7 @@ restarts) dedupe on the server.
 
 Two ways to run it:
 
-- **Standalone**: `python -m activity_monitor.windows_watcher [--base-url ...]`
+- **Standalone**: `python -m activity_monitor.services.windows_watcher [--base-url ...]`
   POSTs each event to the running backend's ingest endpoint (`--tray` adds a
   tray icon showing the backend connection state while it runs).
 - **Embedded**: the backend starts it in-process (see `--watch-windows` /
@@ -60,11 +60,11 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib import request
 
-from activity_monitor.process_config import ProcessConfigError, ProcessRule, apply_rules, load_process_config
-from activity_monitor.tray import TrayIcon
+from activity_monitor.util.process_config import ProcessConfigError, ProcessRule, apply_rules, load_process_config
+from activity_monitor.util.tray import TrayIcon
 
 if TYPE_CHECKING:
-    from activity_monitor.sources import SourceProvider
+    from activity_monitor.services.sources import SourceProvider
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 DESKTOP_SWITCHDESKTOP = 0x0100
@@ -340,8 +340,8 @@ class DatabaseSink:
             return False
 
     async def _store(self, payload: dict[str, Any]) -> None:
-        from activity_monitor import db
-        from activity_monitor.api import store_events
+        from activity_monitor.services import db
+        from activity_monitor.services.events import store_events
 
         async with db.new_session() as session:
             await store_events(session, self._provider, [payload])

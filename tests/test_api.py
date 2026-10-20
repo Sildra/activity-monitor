@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from activity_monitor.main import create_app
-from activity_monitor.models import as_utc
+from activity_monitor.util.time import as_utc
 
 
 def make_client(

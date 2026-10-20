@@ -10,7 +10,7 @@ from typing import Any, Self
 
 import pytest
 
-from activity_monitor.process_config import parse_process_config
+from activity_monitor.util.process_config import parse_process_config
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows-only watcher")
 
@@ -18,7 +18,7 @@ BASE = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
 
 
 def load_watcher_module() -> Any:
-    from activity_monitor import windows_watcher
+    from activity_monitor.services import windows_watcher
 
     return windows_watcher
 

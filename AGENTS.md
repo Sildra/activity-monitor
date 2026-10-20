@@ -10,7 +10,7 @@ React/TS/Vite frontend, single server serving the built frontend.
 | Run backend | `python -m activity_monitor.main` |
 | Run backend (supervised) | `python supervisor.py` |
 | Run backend + embedded desktop watcher | `python -m activity_monitor.main --watch-windows` |
-| Run Windows watcher (standalone) | `python -m activity_monitor.windows_watcher` |
+| Run Windows watcher (standalone) | `python -m activity_monitor.services.windows_watcher` |
 | Build frontend | `cd frontend && npm run build` |
 | Lint backend | `python -m ruff check .` |
 | Format backend | `python -m ruff format .` |
@@ -23,11 +23,25 @@ React/TS/Vite frontend, single server serving the built frontend.
 
 - `activity_monitor/` — FastAPI app
   - `main.py` — CLI, `create_app`, lifespan, serves `frontend/dist` from CWD if present
-  - `config.py` — `AppConfig.load()` (plain yaml -> dataclass; no config service/tree)
-  - `db.py` — async SQLite engine + `async_sessionmaker` + `get_session` dependency
-  - `models.py` — `ActivityEvent` (SQLModel) + response models (`EventOut`, `ActorLane`, …)
-  - `sources.py` — `SourceProvider` base, `BashHistory`/`GitHistory`/`Push` providers, `PROVIDERS`, `build_sources`
-  - `api.py` — all endpoints (one router) + optional HTTP Basic auth dependency (`require_auth`)
+  - `log.py` — `get_logger` + the uvicorn timestamp formatters
+  - `api/` — one router module per resource, each with `router = APIRouter(prefix="/api")`,
+    included one by one by `create_app` (auth dependency applied at include time):
+    `sources.py` (list/fetch/ingest), `programs.py` (start/beat/end/consolidate),
+    `timelines.py` (presence/user/code/agentic), `events.py` (`/tasks`, `/tasks/summary`,
+    `/actors`, `/kinds`, `/stats`), plus `deps.py` (`SessionDep`, `require_auth`,
+    `stale_after`)
+  - `services/` — `config.py` (`AppConfig.load()`; plain yaml -> dataclass; no config
+    service/tree), `db.py` (async SQLite engine + `async_sessionmaker` + `get_session`
+    dependency), `sources.py` (`SourceProvider` base, `BashHistory`/`GitHistory`/`Push`
+    providers, `PROVIDERS`, `build_sources`), `events.py` (`store_events` single write
+    path + focus open/close helpers), `programs.py` (`expire_stale`,
+    `find_active_program`), `timelines.py` (lane/segment/span computation),
+    `windows_watcher.py` (desktop watcher — see its bullet below)
+  - `model/` — SQLModel tables + Pydantic DTOs, one module per entity: `event.py`
+    (`ActivityEvent`, `EventOut`, `SourceInfo`, `StatsOut`, `TaskSummary`), `program.py`
+    (`Program`, program/presence DTOs + `ConsolidateOut`), `timeline.py` (user/code/
+    agentic lane DTOs)
+  - `util/` — `time.py` (`as_utc`, `parse_timestamp`), `process_config.py`, `tray.py`
 - `frontend/` — Vite + React 19 + TS + MUI app
 - `plugins/opencode-v2/` — opencode 2 plugin (entry `index.ts`, `@opencode/plugin`) reporting program
   lifecycle + prompts: on load it POSTs `/api/programs/start` with `program_id` = the OS PID
@@ -88,7 +102,7 @@ React/TS/Vite frontend, single server serving the built frontend.
 - `pyproject.toml` — metadata, deps, ruff config, hatchling build, scripts `activity-monitor` +
   `activity-monitor-windows`
 - `supervisor.py` — restarts `python -m activity_monitor.main`
-- `activity_monitor/windows_watcher.py` — push watcher for desktop activity: polls the foreground
+- `activity_monitor/services/windows_watcher.py` — push watcher for desktop activity: polls the foreground
   window (`GetForegroundWindow`), input-idle time (`GetLastInputInfo`) and lock state
   (`OpenInputDesktop`), emitting `focus` / `idle.start` / `idle.end` / `lock` / `unlock` transitions
   (the `windows` Push source). Stdlib `ctypes` only; each event carries a unique `id` so re-sends
@@ -104,7 +118,7 @@ React/TS/Vite frontend, single server serving the built frontend.
   (`QueryUnbiasedInterruptTime`, which stops during sleep) and, on a divergence over `skew_seconds`
   (default 30), enters the locked state at the last pre-sleep tick — closed by the normal lock
   handling at wake (session woke unlocked) or at the real unlock (machine locked to sleep) — so
-  sleeping time is not counted as attention. Standalone (`python -m activity_monitor.windows_watcher`)
+  sleeping time is not counted as attention. Standalone (`python -m activity_monitor.services.windows_watcher`)
   it POSTs to `/api/ingest/windows`; embedded (`--watch-windows` / `general.watch_windows`) the backend
   starts it in-process and it writes straight to the DB via `store_events`. While it runs it also
   emits a `heartbeat` every `heartbeat_seconds` (default 60) so the server can tell the watcher is
@@ -115,7 +129,7 @@ React/TS/Vite frontend, single server serving the built frontend.
   `--host`, `--task`, `--process-config`, `--username`, `--password`, `--ca-cert`, `--client-cert`,
   `--client-key`, `--insecure`) plus `--poll`/`--idle-minutes`/`--skew-seconds`/`--heartbeat-seconds`;
   a flag wins over its env var (`ACTIVITY_MONITOR_PROCESS_CONFIG`). `--tray` puts a tray icon in
-  the notification area while the standalone watcher runs (`activity_monitor/tray.py`, ctypes
+  the notification area while the standalone watcher runs (`activity_monitor/util/tray.py`, ctypes
   `Shell_NotifyIcon` + a message-loop thread): green = the last event delivery succeeded, red = it
   failed, gray = nothing sent yet; the tooltip/menu show the state and an `Exit` entry stops the
   watcher. The backend takes `--tray` too (see **Run**), reusing the same icon: green = it finished
@@ -136,7 +150,7 @@ React/TS/Vite frontend, single server serving the built frontend.
   holds `general` (api_port, database, optional stale_after_seconds, watch_windows,
   basic_auth_username/basic_auth_password) and `sources`.
 - **Auth**: optional HTTP Basic auth on every `/api/*` route via the `require_auth` dependency
-  (`api.py`), mounted by `create_app` only when `general.basic_auth_username` is set. Credentials
+  (`api/deps.py`), mounted by `create_app` only when `general.basic_auth_username` is set. Credentials
   are compared with `secrets.compare_digest`; a mismatch returns `401` + `WWW-Authenticate: Basic`.
   The static UI and the OpenAPI docs stay public. All external clients send the
   `ACTIVITY_MONITOR_USERNAME`/`ACTIVITY_MONITOR_PASSWORD` variables.
@@ -144,13 +158,15 @@ React/TS/Vite frontend, single server serving the built frontend.
   `duration_ms`, `title`, `detail`, `tags` JSON, `data` JSON, unique `dedup_key`) + `Program`
   (`program_id`, `source`, `host`, `actor`, `started_at`, `last_seen_at`,
   `ended_at`) for running programs. Tables are created at startup via
-  `SQLModel.metadata.create_all`; because there is no migration framework, `db._ensure_columns`
-  back-fills columns added later to existing databases (currently `activityevent.host`).
+  `SQLModel.metadata.create_all`; because there is no migration framework,
+  `services.db._ensure_columns` back-fills columns added later to existing databases (currently
+  `activityevent.host`).
 - **Timestamps**: store and compare everything in UTC (`datetime.now(UTC)`; `parse_timestamp`
-  converts naive inputs assuming local time; `as_utc` re-attaches tz to DB reads). SQLite stores
+  (`util/time.py`) converts naive inputs assuming local time; `as_utc` re-attaches tz to DB reads).
+  SQLite stores
   datetimes as UTC-wall strings, so naive/aware mixing silently breaks range filters — keep tests
   and calls timezone-consistent.
-- **Sources** (`sources.py`): subclass `SourceProvider`; implement `parse(raw) -> dict`. Set
+- **Sources** (`services/sources.py`): subclass `SourceProvider`; implement `parse(raw) -> dict`. Set
   `is_pull = True` and override `fetch()` for pull sources. Register the class in `PROVIDERS`.
   `parse` returns canonical fields via `make_event(...)`, which stamps each event's `host` from
   `local_host()` (`ACTIVITY_MONITOR_ORIGIN` or the OS hostname) unless the payload supplies one;
@@ -162,7 +178,7 @@ React/TS/Vite frontend, single server serving the built frontend.
   instead of leaving it empty.
   Pull fetches run off the event loop (`asyncio.to_thread`) because `fetch()` is blocking.
 - **Ingest**: idempotent on `dedup_key` (external `id` or payload hash). New events are stored,
-  duplicates ignored. `store_events` in `api.py` is the single write path — except `heartbeat`
+  duplicates ignored. `store_events` in `services/events.py` is the single write path — except `heartbeat`
   records, which are liveness pings: they are never stored (the latest is kept on the source
   provider for the user timeline's staleness check). A top-level `host` in the
   payload is stored on the event (and removed from `data.raw`). A `task.set` event backs the
@@ -171,17 +187,17 @@ React/TS/Vite frontend, single server serving the built frontend.
   the previous `task.set` (`_backfill_task`) — the `/task` command only pins later events, so this
   retroactively attributes work done before the id was set while leaving earlier task ranges alone.
 - **Programs / presence**: `POST /api/programs/start|beat|end` manage live programs. `beat` bumps
-  `last_seen_at`; `end` and `_expire_stale` (stale after `stale_after_seconds`) close the program at
+  `last_seen_at`; `end` and `expire_stale` (stale after `stale_after_seconds`) close the program at
   `last_seen_at` — its last activity — so a late exit request does not add a silent tail.
   `GET /api/timelines/presence` groups programs by `(source, host)` and assigns lane numbers at
-  query time with `_assign_lanes` — a greedy non-overlap schedule, so restarted instances reuse
+  query time with `assign_lanes` — a greedy non-overlap schedule, so restarted instances reuse
   the lowest lane and merge into one line. Each lane renders `active`/`idle`/`closed`/`waiting`
-  segments (`_active_ranges` + `_compose_segments`). States are driven by
+  segments (`active_ranges` + `compose_segments`). States are driven by
   event kinds, not matched pairs: `prompt.begin` → `active`, `permission.asked` → `waiting`,
   `permission.replied` → `active`, `question.asked` → `waiting`, `question.replied` → `active`,
   `prompt.end` → `idle` (`_EVENT_STATE`); a run is `idle` by
   default and ends `closed`. Events attach to a lane via `data.raw.program.id`
-  (`_distribute_events`; because consolidation can split one program across blocks that land in
+  (`distribute_events`; because consolidation can split one program across blocks that land in
   different lanes, each event goes to the lane whose block covers its timestamp so it is never drawn
   twice).
   The opencode plugins emit `permission.asked`/`permission.replied` only when the user is actually
@@ -195,12 +211,12 @@ React/TS/Vite frontend, single server serving the built frontend.
   `idle_seconds` (default 3600) splits it into separate `Program` rows that share the program id, so
   the dead time is not counted as presence. It also drops every `windows` `focus` open whose span
   already has a close — the close carries `duration_ms`, so the open row only survives as the
-  duplicate `_merge_focus_spans` collapses away (pairs are matched in `(timestamp, id)` order, the
+  duplicate `merge_focus_spans` collapses away (pairs are matched in `(timestamp, id)` order, the
   same order the merge walks; a trailing open with no close is the live span and is kept, and the
-  merged event stays dated at the span start because `_merge_focus_spans` back-dates a lone close).
+  merged event stays dated at the span start because `merge_focus_spans` back-dates a lone close).
   Idempotent; returns `{removed, trimmed, split, dropped_focus_opens}`.
 - **User timeline**: `GET /api/timelines/user` reconstructs desktop activity from the `windows`
-  source. `_focus_spans` turns `focus` events into spans (a close carries `duration_ms` and ends at
+  source. `focus_spans` turns `focus` events into spans (a close carries `duration_ms` and ends at
   `timestamp`; a trailing open runs to the last thing heard from the watcher — its last stored
   event or the latest in-memory `heartbeat` ping — plus `stale_after_seconds` (heartbeats are not
   stored, so a ping keeps it live across long stretches without state changes while a stopped
@@ -273,4 +289,4 @@ Delete `openapi_local.json` afterwards (gitignored).
 | API | Regenerate the frontend schema (above) |
 | Frontend | `cd frontend && npm run build` |
 | opencode plugin | Restart opencode |
-| Windows watcher | Restart it standalone (`python -m activity_monitor.windows_watcher`), or restart the backend if embedded |
+| Windows watcher | Restart it standalone (`python -m activity_monitor.services.windows_watcher`), or restart the backend if embedded |

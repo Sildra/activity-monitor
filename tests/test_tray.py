@@ -11,7 +11,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows-only tr
 
 
 def load_tray_module() -> Any:
-    from activity_monitor import tray
+    from activity_monitor.util import tray
 
     return tray
 

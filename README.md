@@ -33,7 +33,7 @@ sources:
     repo: C:/path/to/repo
 ```
 
-See `src/activity_monitor/sources.py` for available source types.
+See `activity_monitor/services/sources.py` for available source types.
 
 ### 3. Run
 

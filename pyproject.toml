@@ -65,7 +65,7 @@ split-on-trailing-comma = false
 
 [project.scripts]
 activity-monitor = "activity_monitor.main:main"
-activity-monitor-windows = "activity_monitor.windows_watcher:main"
+activity-monitor-windows = "activity_monitor.services.windows_watcher:main"
 
 [project.urls]
 Homepage = "https://github.com/Sildra/ActivityMonitor"

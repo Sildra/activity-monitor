@@ -8,10 +8,15 @@ import uvicorn
 from fastapi import Depends, FastAPI
 from fastapi.concurrency import asynccontextmanager
 
-from activity_monitor import api, db
-from activity_monitor.config import AppConfig
+from activity_monitor.api.deps import require_auth
+from activity_monitor.api.events import router as events_router
+from activity_monitor.api.programs import router as programs_router
+from activity_monitor.api.sources import router as sources_router
+from activity_monitor.api.timelines import router as timelines_router
 from activity_monitor.log import TimestampAccessFormatter, TimestampFormatter, get_logger
-from activity_monitor.sources import PushSource, build_sources
+from activity_monitor.services import db
+from activity_monitor.services.config import AppConfig
+from activity_monitor.services.sources import PushSource, build_sources
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -81,12 +86,12 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         watcher_thread = None
 
         if config.watch_windows:
-            from activity_monitor.process_config import load_process_config
-            from activity_monitor.windows_watcher import (
+            from activity_monitor.services.windows_watcher import (
                 DEFAULT_HEARTBEAT_SECONDS,
                 DEFAULT_SKEW_SECONDS,
                 start_database_watcher,
             )
+            from activity_monitor.util.process_config import load_process_config
 
             settings = config.source_settings("windows")
             provider = app.state.sources.get("windows") or PushSource("windows", {})
@@ -124,8 +129,12 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
     app = FastAPI(title="Activity Monitor", version="0.1.0", lifespan=lifespan)
     app.state.config = config
-    auth_deps = [Depends(api.require_auth)] if config.basic_auth_username else []
-    app.include_router(api.router, dependencies=auth_deps)
+    auth_deps = [Depends(require_auth)] if config.basic_auth_username else []
+
+    # Include order matches the route order the single router used to register,
+    # so the OpenAPI path list stays identical.
+    for router in (sources_router, programs_router, timelines_router, events_router):
+        app.include_router(router, dependencies=auth_deps)
 
     dev_dist = Path("frontend/dist")
     pkg_dist = Path(str(resources.files("activity_monitor") / "frontend" / "dist"))
@@ -199,7 +208,7 @@ def main() -> None:
         if os.name != "nt":
             raise SystemExit("--tray is only supported on Windows")
 
-        from activity_monitor.tray import TrayIcon
+        from activity_monitor.util.tray import TrayIcon
 
         def stop_server() -> None:
             # uvicorn's graceful shutdown from another thread; it also stops an
