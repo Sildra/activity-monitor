@@ -409,7 +409,8 @@ class WindowsWatcher:
         self.flush()
 
         if self.verbose:
-            print(f"[watcher] {kind}: {fields.get('title') or fields.get('detail') or ''}", flush=True)
+            label = fields.get("title") or fields.get("detail") or fields.get("process")
+            print(f"[watcher] {kind}: {label or ''}", flush=True)
 
     def flush(self) -> None:
         if not self._pending:
@@ -473,20 +474,15 @@ class WindowsWatcher:
         The configured couples rewrite the program name/title and may derive
         the task from them — the task comes from configuration (then the
         explicit `task` fallback, then `Unknown`), never from the raw process
-        name. A rewritten name also takes over `detail`, so a redacted program
-        does not leak its image path.
+        name. `process` carries the rewritten basename (the only program
+        identity reported): the image path and pid are deliberately not sent —
+        the basename already says what is running, and nothing correlates a pid.
         """
         name = str(source["process"] or "")
         title = str(source["title"] or "")
         new_name, new_title, rule_task = apply_rules(self.process_rules, name, title)
-        detail = new_name if new_name != name else str(source["image"] or f"pid {source['pid']}")
 
-        return {
-            "title": new_title,
-            "task": rule_task or self.task or UNKNOWN_TASK,
-            "process": new_name,
-            "detail": detail,
-        }
+        return {"title": new_title, "task": rule_task or self.task or UNKNOWN_TASK, "process": new_name}
 
     def _emit_focus(self, current: dict[str, Any] | None, now: datetime) -> None:
         """Close the previous focus span and open the next one."""

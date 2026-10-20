@@ -180,3 +180,4 @@ class ConsolidateOut(BaseModel):
     removed: int = 0
     trimmed: int = 0
     split: int = 0
+    dropped_focus_opens: int = 0

@@ -244,6 +244,8 @@ def test_focus_task_defaults_to_unknown(monkeypatch: pytest.MonkeyPatch) -> None
     # and keeps the foreground process as event data instead.
     assert [event["task"] for event in focus] == ["Unknown"]
     assert [event["process"] for event in focus] == ["code.exe"]
+    # The image path / pid never travel: `process` is the whole identity.
+    assert all("detail" not in event for event in focus)
 
 
 def test_process_config_rewrites_focus_fields(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -261,8 +263,9 @@ def test_process_config_rewrites_focus_fields(monkeypatch: pytest.MonkeyPatch) -
 
     focus = [event for event in events if event["kind"] == "focus"]
     assert [(event["task"], event["process"], event["title"]) for event in focus] == [("ide", "[redacted]", "editor")]
-    # The rewritten name also takes over detail so the image path cannot leak it.
-    assert focus[0]["detail"] == "[redacted]"
+    # Redaction needs no `detail`: focus never carries an image path or pid, so
+    # the rewritten basename in `process` cannot leak the original program.
+    assert all("detail" not in event for event in focus)
 
 
 # -- event actor --------------------------------------------------------------

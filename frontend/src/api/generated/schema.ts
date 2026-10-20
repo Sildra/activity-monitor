@@ -117,12 +117,17 @@ export interface paths {
         put?: never;
         /**
          * Consolidate Programs
-         * @description Tidy the stored program history.
+         * @description Tidy the stored history.
          *
          *     Finished programs are rewritten from their own events: a program with no events is
          *     deleted, each one is trimmed to its first and last non-idle boundary, and an idle
          *     gap longer than ``idle_seconds`` splits it into separate blocks so the dead time is
          *     not counted as presence. Running programs (``ended_at`` unset) are left alone.
+         *
+         *     Desktop ``focus`` opens whose span already has a close are dropped too: the close
+         *     carries the span's ``duration_ms``, so the open row only survives as the duplicate
+         *     readers merge away (see ``_merge_focus_spans``). A trailing open with no close is
+         *     the still-running span and is kept.
          */
         post: operations["consolidate_programs_api_programs_consolidate_post"];
         delete?: never;
@@ -345,6 +350,11 @@ export interface components {
              * @default 0
              */
             split: number;
+            /**
+             * Dropped Focus Opens
+             * @default 0
+             */
+            dropped_focus_opens: number;
         };
         /** EventOut */
         EventOut: {

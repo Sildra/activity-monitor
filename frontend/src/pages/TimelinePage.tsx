@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Button, CircularProgress, MenuItem, Paper, Snackbar, TextField, Tooltip, Typography } from "@mui/material";
-import CalendarTodayIcon from "@mui/icons-material/CalendarToday";
+import { CalendarDaysIcon } from "../components/CalendarDaysIcon";
 import CompressIcon from "@mui/icons-material/Compress";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { api } from "../api/client";
@@ -26,31 +26,6 @@ interface TimelineData {
 
 const DEFAULT_START = toDateTimeInput(startOfDay(new Date(Date.now() - 6 * 86400_000)));
 const DEFAULT_END = toDateTimeInput(endOfDay(new Date()));
-
-// A calendar glyph carrying the number of days a range preset covers (`1` = today, `7` = this week).
-function CalendarDaysIcon({ days }: { days: number }) {
-    return (
-        <Box sx={{ position: "relative", display: "inline-flex" }}>
-            <CalendarTodayIcon fontSize="small" />
-            <Box
-                component="span"
-                sx={{
-                    position: "absolute",
-                    inset: 0,
-                    display: "flex",
-                    alignItems: "flex-end",
-                    justifyContent: "center",
-                    pb: "14%",
-                    fontSize: 9,
-                    fontWeight: 700,
-                    lineHeight: 1,
-                }}
-            >
-                {days}
-            </Box>
-        </Box>
-    );
-}
 
 export default function TimelinePage() {
     const [startAt, setStartAt] = useState(DEFAULT_START);
@@ -166,9 +141,9 @@ export default function TimelinePage() {
         api.POST("/api/programs/consolidate")
             .then((response) => {
                 if (response.data) {
-                    setConsolidateResult(
-                        `Removed ${response.data.removed} · trimmed ${response.data.trimmed} · split ${response.data.split}`,
-                    );
+                    const { removed, trimmed, split, dropped_focus_opens } = response.data;
+                    const dropped = dropped_focus_opens ? ` · dropped ${dropped_focus_opens} focus opens` : "";
+                    setConsolidateResult(`Removed ${removed} · trimmed ${trimmed} · split ${split}${dropped}`);
                 }
             })
             .finally(() => {
@@ -281,6 +256,20 @@ export default function TimelinePage() {
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, height: "100%", p: 2, overflow: "auto" }}>
             <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2 }}>
                 <Typography variant="h6">Timeline</Typography>
+                <Tooltip title="Refresh">
+                    <span>
+                        <Button
+                            variant="outlined"
+                            size="small"
+                            onClick={refresh}
+                            disabled={loading}
+                            sx={{ minWidth: 0, px: 1, height: 40 }}
+                        >
+                            <RefreshIcon fontSize="small" />
+                        </Button>
+                    </span>
+                </Tooltip>
+                {loading && <CircularProgress size={20} />}
                 <TextField
                     label="From"
                     type="datetime-local"
@@ -317,19 +306,6 @@ export default function TimelinePage() {
                         <CalendarDaysIcon days={7} />
                     </Button>
                 </Tooltip>
-                <Tooltip title="Refresh">
-                    <span>
-                        <Button
-                            variant="outlined"
-                            size="small"
-                            onClick={refresh}
-                            disabled={loading}
-                            sx={{ minWidth: 0, px: 1, height: 40 }}
-                        >
-                            <RefreshIcon fontSize="small" />
-                        </Button>
-                    </span>
-                </Tooltip>
                 <Tooltip title="Consolidate">
                     <span>
                         <Button
@@ -345,7 +321,6 @@ export default function TimelinePage() {
                     </span>
                 </Tooltip>
                 {consolidating && <CircularProgress size={20} />}
-                {loading && <CircularProgress size={20} />}
                 <TextField
                     select
                     label="Active task"

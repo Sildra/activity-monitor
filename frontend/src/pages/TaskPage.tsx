@@ -11,10 +11,12 @@ import {
     MenuItem,
     Paper,
     TextField,
+    Tooltip,
     Typography,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { api } from "../api/client";
+import { CalendarDaysIcon } from "../components/CalendarDaysIcon";
 import Timeline, { type TimelineEvent } from "../components/Timeline";
 import { groupBy, type Lane } from "../lib/timeline";
 import { endOfDay, formatDateTime, formatTime, startOfDay, startOfWeek, toDateTimeInput, toIso } from "../lib/format";
@@ -42,6 +44,19 @@ function toTimelineEvent(event: EventOut): TimelineEvent {
         title: event.title,
         duration_ms: event.duration_ms,
     };
+}
+
+/** Row label: title, then detail, then the reported program (windows focus carries only `process`). */
+function eventLabel(event: EventOut): string {
+    const raw = event.data["raw"];
+    const process = typeof raw === "object" && raw !== null ? (raw as { process?: unknown })["process"] : undefined;
+
+    return (
+        event.title ??
+        event.detail ??
+        (typeof process === "string" && process ? process : undefined) ??
+        "-"
+    );
 }
 
 export default function TaskPage() {
@@ -203,7 +218,22 @@ export default function TaskPage() {
             </Paper>
 
             <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 1.5, overflow: "hidden" }}>
-                <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
+                {/* pt so the shrunk From/To labels (raised ~9px above the field) aren't clipped by the overflow-hidden parent */}
+                <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center", pt: 1.5 }}>
+                    <Tooltip title="Refresh">
+                        <span>
+                            <Button
+                                variant="outlined"
+                                size="small"
+                                onClick={refresh}
+                                disabled={loading}
+                                sx={{ minWidth: 0, px: 1, height: 40 }}
+                            >
+                                <RefreshIcon fontSize="small" />
+                            </Button>
+                        </span>
+                    </Tooltip>
+                    {loading && <CircularProgress size={20} />}
                     <TextField
                         label="From"
                         type="datetime-local"
@@ -220,20 +250,26 @@ export default function TaskPage() {
                         onChange={(e) => setEndAt(e.target.value)}
                         slotProps={{ inputLabel: { shrink: true } }}
                     />
-                    <Button
-                        size="small"
-                        variant="text"
-                        onClick={() => applyRange(startOfDay(new Date()), endOfDay(new Date()))}
-                    >
-                        Today
-                    </Button>
-                    <Button
-                        size="small"
-                        variant="text"
-                        onClick={() => applyRange(startOfWeek(new Date()), endOfDay(new Date()))}
-                    >
-                        This week
-                    </Button>
+                    <Tooltip title="Today">
+                        <Button
+                            variant="text"
+                            size="small"
+                            onClick={() => applyRange(startOfDay(new Date()), endOfDay(new Date()))}
+                            sx={{ minWidth: 0, px: 1, height: 40 }}
+                        >
+                            <CalendarDaysIcon days={1} />
+                        </Button>
+                    </Tooltip>
+                    <Tooltip title="This week">
+                        <Button
+                            variant="text"
+                            size="small"
+                            onClick={() => applyRange(startOfWeek(new Date()), endOfDay(new Date()))}
+                            sx={{ minWidth: 0, px: 1, height: 40 }}
+                        >
+                            <CalendarDaysIcon days={7} />
+                        </Button>
+                    </Tooltip>
                     <TextField
                         select
                         label="Source"
@@ -279,10 +315,6 @@ export default function TaskPage() {
                             </MenuItem>
                         ))}
                     </TextField>
-                    <Button variant="outlined" startIcon={<RefreshIcon />} onClick={refresh} disabled={loading}>
-                        Refresh
-                    </Button>
-                    {loading && <CircularProgress size={20} />}
                 </Box>
 
                 <Paper variant="outlined" sx={{ p: 2 }}>
@@ -303,7 +335,7 @@ export default function TaskPage() {
                                     </Typography>
                                     <Chip size="small" label={event.kind} sx={{ flexShrink: 0 }} />
                                     <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0 }}>
-                                        {event.title ?? event.detail ?? "-"}
+                                        {eventLabel(event)}
                                     </Typography>
                                     <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
                                         {event.actor}

@@ -69,8 +69,11 @@ React/TS/Vite frontend, single server serving the built frontend.
   Monitor. Typecheck
   with `npm run typecheck` in the plugin folder. Restart opencode after editing the plugin.
 - `plugins/git/` — `post-commit` + `pre-push` git hooks POSTing to `/api/ingest/git`; commit
-  registers branch + commit id (+ repo/author/subject), push registers remote + branch + commit +
-  prior sha as a distinct `push` event (`GitHistorySource.parse` branches on `kind`). Install with
+  registers branch + commit id (+ repo/author/subject) plus the commit's `git show --stat` diff
+  summary (`parse_stat` keeps the block, the file list and the counts in
+  `data.stat`/`data.files`/`data.insertions`/`data.deletions`, and appends a compact
+  `N files, +x/-y` to the detail text), push registers remote + branch + commit + prior sha as a
+  distinct `push` event (`GitHistorySource.parse` branches on `kind`). Install with
   `git config core.hooksPath <repo>/plugins/git`; `plugins/README.md` documents client setup. Every
   client (plugin, standalone watcher, hooks) reads `ACTIVITY_MONITOR_URL` (plus the optional
   `ACTIVITY_MONITOR_CA_CERT`/`_CLIENT_CERT`/`_CLIENT_KEY` mTLS,
@@ -91,7 +94,9 @@ React/TS/Vite frontend, single server serving the built frontend.
   is `ACTIVITY_MONITOR_TASK` when set (the desktop counterpart of the git `TASK_PATTERN` /
   opencode `/task`, so one task ties the sources together), else the default `Unknown` — a task
   is a unit of work, never a process; the foreground process travels in the event's `process`
-  field (`data.raw.process` server-side). Each tick also
+  field (`data.raw.process` server-side), and it is the only program identity reported — the
+  image path and pid are never sent (focus has no `detail`; it is left to the `lock` sleep marker),
+  so an untitled window is labelled from that name in the Events list. Each tick also
   compares the wall clock against the unbiased interrupt-time count
   (`QueryUnbiasedInterruptTime`, which stops during sleep) and, on a divergence over `skew_seconds`
   (default 30), enters the locked state at the last pre-sleep tick — closed by the normal lock
@@ -185,7 +190,12 @@ React/TS/Vite frontend, single server serving the built frontend.
   finished programs (running ones are untouched): a program id with no events is deleted, each
   program is trimmed to its first/last non-idle boundary, and an idle gap longer than
   `idle_seconds` (default 3600) splits it into separate `Program` rows that share the program id, so
-  the dead time is not counted as presence. Idempotent; returns `{removed, trimmed, split}`.
+  the dead time is not counted as presence. It also drops every `windows` `focus` open whose span
+  already has a close — the close carries `duration_ms`, so the open row only survives as the
+  duplicate `_merge_focus_spans` collapses away (pairs are matched in `(timestamp, id)` order, the
+  same order the merge walks; a trailing open with no close is the live span and is kept, and the
+  merged event stays dated at the span start because `_merge_focus_spans` back-dates a lone close).
+  Idempotent; returns `{removed, trimmed, split, dropped_focus_opens}`.
 - **User timeline**: `GET /api/timelines/user` reconstructs desktop activity from the `windows`
   source. `_focus_spans` turns `focus` events into spans (a close carries `duration_ms` and ends at
   `timestamp`; a trailing open runs to the last thing heard from the watcher — its last stored
