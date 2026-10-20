@@ -24,7 +24,6 @@ import type { components } from "../api/generated/schema";
 
 type EventOut = components["schemas"]["EventOut"];
 type TaskSummary = components["schemas"]["TaskSummary"];
-type SourceInfo = components["schemas"]["SourceInfo"];
 
 interface TaskData {
     events: EventOut[];
@@ -68,7 +67,7 @@ export default function TaskPage() {
     const [startAt, setStartAt] = useState(DEFAULT_START);
     const [endAt, setEndAt] = useState(DEFAULT_END);
 
-    const [sources, setSources] = useState<SourceInfo[]>([]);
+    const [sources, setSources] = useState<string[]>([]);
     const [actors, setActors] = useState<string[]>([]);
     const [kinds, setKinds] = useState<string[]>([]);
 
@@ -279,9 +278,9 @@ export default function TaskPage() {
                         sx={{ minWidth: 130 }}
                     >
                         <MenuItem value="">All</MenuItem>
-                        {sources.map((item) => (
-                            <MenuItem key={item.name} value={item.name}>
-                                {item.name}
+                        {sources.map((name) => (
+                            <MenuItem key={name} value={name}>
+                                {name}
                             </MenuItem>
                         ))}
                     </TextField>

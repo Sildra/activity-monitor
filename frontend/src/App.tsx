@@ -2,14 +2,12 @@ import { useState } from "react";
 import { AppBar, Box, Tab, Tabs, Toolbar, Typography } from "@mui/material";
 import TimelinePage from "./pages/TimelinePage";
 import TaskPage from "./pages/TaskPage";
-import SourcesPage from "./pages/SourcesPage";
 
-type Page = "timeline" | "task" | "sources";
+type Page = "timeline" | "task";
 
 const PAGES: Array<{ id: Page; label: string }> = [
     { id: "timeline", label: "Timeline" },
     { id: "task", label: "Events" },
-    { id: "sources", label: "Sources" },
 ];
 
 function initialPage(): Page {
@@ -42,7 +40,6 @@ export default function App() {
             <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
                 {page === "timeline" && <TimelinePage />}
                 {page === "task" && <TaskPage />}
-                {page === "sources" && <SourcesPage />}
             </Box>
         </Box>
     );

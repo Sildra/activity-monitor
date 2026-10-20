@@ -98,14 +98,14 @@ async def task_summary(
 
 @router.get("/actors", response_model=list[str])
 async def list_actors(session: SessionDep) -> list[str]:
-    rows = (await session.execute(select(distinct(ActivityEvent.actor)).order_by(ActivityEvent.actor))).scalars().all()
+    rows = (await session.execute(select(ActivityEvent.actor).distinct().order_by(ActivityEvent.actor))).scalars().all()
 
     return list(rows)
 
 
 @router.get("/kinds", response_model=list[str])
 async def list_kinds(session: SessionDep) -> list[str]:
-    rows = (await session.execute(select(distinct(ActivityEvent.kind)).order_by(ActivityEvent.kind))).scalars().all()
+    rows = (await session.execute(select(ActivityEvent.kind).distinct().order_by(ActivityEvent.kind))).scalars().all()
 
     return list(rows)
 

@@ -1,15 +1,10 @@
-"""Pluggable event sources.
+"""Source providers.
 
-A source is anything that produces activity events. Two shapes exist:
-
-- **pull** providers (`is_pull = True`): the server asks them for data on demand
-  (`fetch`) — e.g. reading a shell history file or walking a git log.
-- **push** providers: the source is external and posts events to the ingest
-  endpoint; `fetch` yields nothing.
-
-Every provider only has to implement `parse(raw) -> dict`, turning a
-source-native record into the canonical event fields. The storage layer is
-agnostic to where the record came from.
+A source is anything that produces activity events; every producer is an
+external client that posts events to the ingest endpoint. A provider only has
+to implement `parse(raw) -> dict`, turning a source-native record into the
+canonical event fields — the storage layer is agnostic to where the record
+came from. Names without a built-in provider get a transient `PushSource`.
 """
 
 from __future__ import annotations
@@ -19,13 +14,11 @@ import json
 import os
 import re
 import socket
-import subprocess
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from activity_monitor.services.config import AppConfig
 from activity_monitor.util.time import parse_timestamp
 
 
@@ -169,9 +162,6 @@ def make_event(
 
 
 class SourceProvider(ABC):
-    KIND = "Base"
-    is_pull = False
-
     def __init__(self, name: str, settings: dict[str, Any]):
         self.name = name
         self.settings = settings
@@ -184,18 +174,12 @@ class SourceProvider(ABC):
     def actor(self) -> str:
         return str(self.settings.get("actor") or "user")
 
-    def fetch(self) -> list[dict[str, Any]]:
-        """Return source-native records to ingest. Pull providers override this."""
-        return []
-
     @abstractmethod
     def parse(self, raw: dict[str, Any]) -> dict[str, Any]:
         """Map a source-native record to the canonical event fields."""
 
 
 class PushSource(SourceProvider):
-    KIND = "Push"
-
     def parse(self, raw: dict[str, Any]) -> dict[str, Any]:
         stored = dict(raw)
         timestamp = parse_timestamp(stored.pop("timestamp", None) or stored.pop("time", None))
@@ -224,132 +208,8 @@ class PushSource(SourceProvider):
         )
 
 
-class BashHistorySource(SourceProvider):
-    KIND = "BashHistory"
-    is_pull = True
-
-    def history_path(self) -> Path:
-        return Path(str(self.settings.get("path") or "~/.bash_history")).expanduser()
-
-    def fetch(self) -> list[dict[str, Any]]:
-        path = self.history_path()
-
-        if not path.exists():
-            return []
-
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            return []
-
-        limit = int(self.settings.get("max_entries", 1000))
-        records: list[dict[str, Any]] = []
-        pending: float | None = None
-
-        for index, line in enumerate(lines):
-            stripped = line.strip()
-
-            if stripped.startswith("#") and stripped[1:].isdigit():
-                pending = float(stripped[1:])
-                continue
-
-            if not stripped:
-                continue
-
-            records.append({"command": line, "timestamp": pending, "line": index})
-            pending = None
-
-        return records[-limit:]
-
-    def parse(self, raw: dict[str, Any]) -> dict[str, Any]:
-        command = str(raw.get("command", "")).strip()
-        timestamp = parse_timestamp(raw.get("timestamp"))
-        mtime = self._mtime()
-
-        return make_event(
-            kind="command",
-            timestamp=timestamp or mtime,
-            actor=self.actor,
-            title=command[:120],
-            detail=command,
-            data={"source": self.name, "command": command},
-            dedup_key=dedup(self.name, raw.get("line"), raw.get("timestamp"), command),
-        )
-
-    def _mtime(self) -> datetime | None:
-        try:
-            return datetime.fromtimestamp(self.history_path().stat().st_mtime, tz=UTC)
-        except OSError:
-            return None
-
-
 class GitHistorySource(SourceProvider):
-    KIND = "GitHistory"
-    is_pull = True
-
-    _FIELD = "\x1f"
-    _RECORD = "\x1e"
-
-    def repositories(self) -> list[str]:
-        configured = self.settings.get("repositories") or []
-
-        return [str(repo) for repo in configured]
-
-    def fetch(self) -> list[dict[str, Any]]:
-        limit = int(self.settings.get("max_commits", 500))
-        records: list[dict[str, Any]] = []
-
-        for repo in self.repositories():
-            if not Path(repo).exists():
-                continue
-
-            records.extend(self._fetch_repo(repo, limit))
-
-        return records
-
-    def _fetch_repo(self, repo: str, limit: int) -> list[dict[str, Any]]:
-        fmt = self._FIELD.join(("%H", "%an", "%ae", "%aI", "%s")) + self._RECORD
-
-        try:
-            result = subprocess.run(
-                ["git", "-C", repo, "log", f"--max-count={limit}", f"--pretty=format:{fmt}"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return []
-
-        if result.returncode != 0:
-            return []
-
-        records: list[dict[str, Any]] = []
-
-        for chunk in result.stdout.split(self._RECORD):
-            chunk = chunk.strip("\n")
-
-            if not chunk:
-                continue
-
-            fields = chunk.split(self._FIELD)
-
-            if len(fields) < 5:
-                continue
-
-            commit, author, email, timestamp, message = fields[0], fields[1], fields[2], fields[3], fields[4]
-            records.append(
-                {
-                    "repository": repo,
-                    "commit": commit,
-                    "author": author,
-                    "email": email,
-                    "timestamp": timestamp,
-                    "message": message,
-                }
-            )
-
-        return records
+    """The git hooks' source: parses `post-commit`/`pre-push`/`post-rewrite` payloads."""
 
     def parse(self, raw: dict[str, Any]) -> dict[str, Any]:
         repository = str(raw.get("repository", ""))
@@ -424,24 +284,20 @@ class GitHistorySource(SourceProvider):
         )
 
 
-PROVIDERS: dict[str, type[SourceProvider]] = {
-    provider.KIND: provider for provider in (PushSource, BashHistorySource, GitHistorySource)
+BUILTIN_SOURCES: dict[str, type[SourceProvider]] = {
+    # The desktop watcher's source: always registered so its heartbeats have a
+    # home and the user timeline can tell a live watcher from a stopped one.
+    USER_SOURCE: PushSource,
+    # The git hooks' source: registered so their payloads parse through
+    # GitHistorySource (kind branching, stat summary, task derivation).
+    "git": GitHistorySource,
 }
 
 
-def build_sources(config: AppConfig) -> dict[str, SourceProvider]:
-    sources: dict[str, SourceProvider] = {}
+def build_sources() -> dict[str, SourceProvider]:
+    """The built-in providers that exist regardless of configuration.
 
-    for name, settings in config.sources.items():
-        if not settings.get("enabled", True):
-            continue
-
-        kind = str(settings.get("kind") or "Push")
-        provider_cls = PROVIDERS.get(kind)
-
-        if provider_cls is None:
-            continue
-
-        sources[name] = provider_cls(name, settings)
-
-    return sources
+    Every other name gets a transient `PushSource` on ingest; only these two
+    need a stable identity (heartbeats, parsing).
+    """
+    return {name: provider_cls(name, {}) for name, provider_cls in BUILTIN_SOURCES.items()}

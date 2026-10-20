@@ -11,27 +11,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Sources */
+        /**
+         * List Sources
+         * @description Names of every source seen in the events table (alphabetical).
+         *
+         *     Sources are config-free producers that post to the ingest endpoint, so the
+         *     listing is what actually showed up rather than a configured set.
+         */
         get: operations["list_sources_api_sources_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/sources/{name}/fetch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Fetch Source */
-        post: operations["fetch_source_api_sources__name__fetch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -490,15 +479,6 @@ export interface components {
             /** Actor */
             actor?: string | null;
         };
-        /** SourceInfo */
-        SourceInfo: {
-            /** Name */
-            name: string;
-            /** Kind */
-            kind: string;
-            /** Pull */
-            pull: boolean;
-        };
         /** StatsOut */
         StatsOut: {
             /** Events */
@@ -632,40 +612,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SourceInfo"][];
-                };
-            };
-        };
-    };
-    fetch_source_api_sources__name__fetch_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: number;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": string[];
                 };
             };
         };

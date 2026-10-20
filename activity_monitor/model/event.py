@@ -59,12 +59,6 @@ class EventOut(BaseModel):
         )
 
 
-class SourceInfo(BaseModel):
-    name: str
-    kind: str
-    pull: bool
-
-
 class StatsOut(BaseModel):
     events: int
     sources: int

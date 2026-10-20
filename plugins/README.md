@@ -383,10 +383,8 @@ chmod +x .git/hooks/post-commit .git/hooks/pre-push
 
 The hooks need `git` and `curl` on `PATH` (both ship with Git for Windows).
 
-> The `git` source in `config.yaml` is a pull `GitHistory` source that also accepts
-> these pushes: commit events dedupe against the same commit seen by `git log`,
-> while `push` events are keyed by remote + ref + commit so they stay distinct.
-> Enable the source (`sources.git.enabled: true`).
+> Commit events dedupe by repository + commit id, while `push` events add the
+> remote + ref so the two stay distinct.
 > Git event tasks are derived by the backend from the `TASK_PATTERN` environment
 > variable (set on the backend): the commit subject is searched first, then the
 > branch, and the first match becomes the task (falling back to the repo name).

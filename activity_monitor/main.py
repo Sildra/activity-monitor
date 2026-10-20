@@ -16,7 +16,7 @@ from activity_monitor.api.timelines import router as timelines_router
 from activity_monitor.log import TimestampAccessFormatter, TimestampFormatter, get_logger
 from activity_monitor.services import db
 from activity_monitor.services.config import AppConfig
-from activity_monitor.services.sources import PushSource, build_sources
+from activity_monitor.services.sources import USER_SOURCE, build_sources
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -80,31 +80,22 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await db.init(config.database)
-        app.state.sources = build_sources(config)
+        app.state.sources = build_sources()
 
         watcher_stop = None
         watcher_thread = None
 
         if config.watch_windows:
-            from activity_monitor.services.windows_watcher import (
-                DEFAULT_HEARTBEAT_SECONDS,
-                DEFAULT_SKEW_SECONDS,
-                start_database_watcher,
-            )
+            from activity_monitor.services.windows_watcher import start_database_watcher
             from activity_monitor.util.process_config import load_process_config
 
-            settings = config.source_settings("windows")
-            provider = app.state.sources.get("windows") or PushSource("windows", {})
+            provider = app.state.sources[USER_SOURCE]
             process_config = config.process_config or os.environ.get("ACTIVITY_MONITOR_PROCESS_CONFIG")
+            # The embedded watcher runs on its defaults (poll, idle minutes, skew,
+            # heartbeat); the standalone watcher exposes them as flags.
             watcher_stop, watcher_thread = start_database_watcher(
                 provider,
                 loop=asyncio.get_running_loop(),
-                poll=float(settings.get("poll", 1.0)),
-                idle_minutes=float(settings.get("idle_minutes", 2.0)),
-                skew_seconds=float(settings.get("skew_seconds", DEFAULT_SKEW_SECONDS)),
-                heartbeat=float(settings.get("heartbeat_seconds", DEFAULT_HEARTBEAT_SECONDS)),
-                actor=settings.get("actor"),
-                verbose=bool(settings.get("verbose", False)),
                 process_rules=load_process_config(process_config) if process_config else (),
             )
 

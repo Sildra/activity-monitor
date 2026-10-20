@@ -7,7 +7,7 @@ no node tree — the database file lives next to the process unless overridden.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,9 +31,6 @@ class AppConfig:
     stale_after_seconds: int = DEFAULT_STALE_AFTER_SECONDS
     watch_windows: bool = False
     process_config: str | None = None
-    sources: dict[str, dict[str, Any]] = field(default_factory=dict)
-    pipelines: list[dict[str, Any]] = field(default_factory=list)
-    scanners: dict[str, dict[str, Any]] = field(default_factory=dict)
     ssl_enabled: bool = False
     ssl_certfile: str | None = None
     ssl_keyfile: str | None = None
@@ -69,13 +66,4 @@ class AppConfig:
             ssl_cert_reqs=str(general.get("ssl_cert_reqs", "none")),
             basic_auth_username=_optional_str(general.get("basic_auth_username")),
             basic_auth_password=_optional_str(general.get("basic_auth_password")),
-            sources=dict(data.get("sources") or {}),
-            pipelines=list(data.get("pipelines") or []),
-            scanners=dict(data.get("scanners") or {}),
         )
-
-    def source_settings(self, name: str) -> dict[str, Any]:
-        return dict(self.sources.get(name) or {})
-
-    def scanner_settings(self, name: str) -> dict[str, Any]:
-        return dict(self.scanners.get(name) or {})
