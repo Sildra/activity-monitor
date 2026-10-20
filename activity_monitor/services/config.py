@@ -2,7 +2,7 @@
 
 `config.yaml` is the one file both apps read: the backend
 (`activity_monitor.main`) uses the `general` section and embeds the desktop
-watcher when `watcher.enabled` is set; the standalone watcher
+watcher when `general.watcher` is set; the standalone watcher
 (`python -m activity_monitor.services.windows_watcher`) reads only the
 `watcher` section and pushes events over HTTP.
 
@@ -45,7 +45,9 @@ class GeneralConfig:
     api_port: int = DEFAULT_API_PORT
     database: str = DEFAULT_DATABASE
     stale_after_seconds: int = DEFAULT_STALE_AFTER_SECONDS
-    tray: bool = False
+    watcher: bool = False
+    """Run the desktop watcher inside the backend (direct database ingest). The
+    standalone watcher is always on — that is its whole point."""
     ssl_enabled: bool = False
     ssl_certfile: str | None = None
     ssl_keyfile: str | None = None
@@ -59,13 +61,11 @@ class GeneralConfig:
 class WatcherConfig:
     """The desktop watcher — one OS-agnostic section (only Windows is implemented).
 
-    `enabled` runs it inside the backend (direct database ingest); the standalone
-    watcher ignores `enabled` and every other section, using this one to push over
-    HTTP. The connection keys (`base_url` and the TLS / basic-auth material) only
-    matter in standalone mode.
+    Both ways of running it read this section; `general.watcher` chooses between
+    them. The connection keys (`base_url` and the TLS / basic-auth material) only
+    matter standalone.
     """
 
-    enabled: bool = False
     tray: bool = False
     source: str = DEFAULT_SOURCE
     actor: str | None = None
@@ -111,7 +111,7 @@ class AppConfig:
                 api_port=int(general.get("api_port", DEFAULT_API_PORT)),
                 database=str(general.get("database", DEFAULT_DATABASE)),
                 stale_after_seconds=int(general.get("stale_after_seconds", DEFAULT_STALE_AFTER_SECONDS)),
-                tray=bool(general.get("tray", False)),
+                watcher=bool(general.get("watcher", False)),
                 ssl_enabled=bool(general.get("ssl_enabled", False)),
                 ssl_certfile=general.get("ssl_certfile"),
                 ssl_keyfile=general.get("ssl_keyfile"),
@@ -121,7 +121,6 @@ class AppConfig:
                 basic_auth_password=_optional_str(general.get("basic_auth_password")),
             ),
             watcher=WatcherConfig(
-                enabled=bool(watcher.get("enabled", False)),
                 tray=bool(watcher.get("tray", False)),
                 source=str(watcher.get("source", DEFAULT_SOURCE)),
                 actor=_optional_str(watcher.get("actor")),

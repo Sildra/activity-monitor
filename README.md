@@ -29,9 +29,8 @@ general:            # the backend (API server)
   api_port: 8001
   database: activity_monitor.db
   stale_after_seconds: 300
-  tray: false       # tray icon while the server runs (Windows)
+  watcher: false    # run the desktop watcher inside the backend (direct DB ingest)
 watcher:            # the desktop watcher (see plugins/README.md)
-  enabled: false    # run it inside the backend (direct DB ingest)
   tray: false       # tray icon while the standalone watcher runs (Windows)
 ```
 
@@ -48,7 +47,7 @@ python -m activity_monitor.main
 Or restart-supervised: `python supervisor.py`.
 
 Flags: `--config PATH`, and `--openapi FILE` (dev tooling: dump the OpenAPI schema and
-exit). Everything else — port, database, embedded watcher (`watcher.enabled: true`),
+exit). Everything else — port, database, embedded watcher (`general.watcher: true`),
 tray, SSL, basic auth — is configured in the file.
 
 The UI is served at `http://localhost:8001` (or `https://localhost:8001` if SSL is

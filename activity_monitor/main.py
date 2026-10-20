@@ -42,10 +42,10 @@ def create_app(config: AppConfig) -> FastAPI:
         watcher_stop = None
         watcher_thread = None
 
-        # `watcher.enabled` embeds the watcher (direct database ingest). Off
+        # `general.watcher` embeds the watcher (direct database ingest). Off
         # Windows there is no implementation; the setting is ignored silently so
         # the same config file works everywhere.
-        if config.watcher.enabled and os.name == "nt":
+        if config.general.watcher and os.name == "nt":
             from activity_monitor.services.windows_watcher import start_database_watcher
             from activity_monitor.util.process_config import load_process_config
 
@@ -65,14 +65,6 @@ def create_app(config: AppConfig) -> FastAPI:
                 verbose=config.watcher.verbose,
                 process_rules=load_process_config(process_config) if process_config else (),
             )
-
-        # The tray icon only exists with `general.tray` (main() puts it on the app); it
-        # turns green only once startup succeeded, so a failing init (or watcher
-        # start) above leaves it gray until the process goes away.
-        tray = getattr(app.state, "tray", None)
-
-        if tray is not None:
-            tray.set_state(True)
 
         try:
             yield
@@ -161,29 +153,10 @@ def main() -> None:
     get_logger().info("Activity Monitor: %s://localhost:%s", scheme, uvicorn_config.port)
     get_logger().info("Swagger:          %s://localhost:%s/docs", scheme, uvicorn_config.port)
 
-    tray = None
-
-    # `general.tray` is Windows-only; elsewhere it is ignored silently, like the
-    # watcher, so the same config file works on every OS.
-    if general.tray and os.name == "nt":
-        from activity_monitor.util.tray import TrayIcon
-
-        def stop_server() -> None:
-            # uvicorn's graceful shutdown from another thread; it also stops an
-            # embedded watcher through the lifespan's cleanup.
-            server.should_exit = True
-
-        tray = TrayIcon(f"Activity Monitor — localhost:{uvicorn_config.port}", on_exit=stop_server)
-        tray.start()
-        app.state.tray = tray
-
     try:
         server.run()
     except KeyboardInterrupt:
         pass
-    finally:
-        if tray is not None:
-            tray.stop()
 
 
 if __name__ == "__main__":

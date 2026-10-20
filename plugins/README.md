@@ -347,7 +347,7 @@ the environment variables above override the file when both are set. `--config P
 picks another file; `--run SECONDS` / `--once` are testing aids. On any non-Windows OS
 the watcher is not implemented and exits quietly.
 
-Alternatively, run it **inside** the backend (`watcher.enabled: true` in
+Alternatively, run it **inside** the backend (`general.watcher: true` in
 `config.yaml`): it then writes straight to the database and needs no port or ingest
 call. That mode uses the same `watcher` section (the connection and tray keys only
 apply standalone).

@@ -2,7 +2,7 @@ general:
   api_port: 8001
   database: activity.db
   stale_after_seconds: 300
-  tray: false
+  watcher: false
   ssl_enabled: false
   ssl_certfile: null
   ssl_keyfile: null
@@ -11,7 +11,6 @@ general:
   basic_auth_username: null
   basic_auth_password: null
 watcher:
-  enabled: false
   tray: false
   source: windows
   actor: null

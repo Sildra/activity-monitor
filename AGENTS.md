@@ -9,7 +9,7 @@ React/TS/Vite frontend, single server serving the built frontend.
 |------|---------|
 | Run backend | `python -m activity_monitor.main` |
 | Run backend (supervised) | `python supervisor.py` |
-| Run backend + embedded desktop watcher | `watcher.enabled: true` in `config.yaml`, then `python -m activity_monitor.main` |
+| Run backend + embedded desktop watcher | `general.watcher: true` in `config.yaml`, then `python -m activity_monitor.main` |
 | Run Windows watcher (standalone) | `python -m activity_monitor.services.windows_watcher` |
 | Build frontend | `cd frontend && npm run build` |
 | Lint backend | `python -m ruff check .` |
@@ -73,9 +73,9 @@ React/TS/Vite frontend, single server serving the built frontend.
   `QueryUnbiasedInterruptTime` skew and counted as locked, not attention. Standalone it
   POSTs to `/api/ingest/event`, reading the `watcher:` section of `config.yaml` (client env
   vars override it; every other section is ignored); embedded it writes straight to the DB
-  via `store_events` when `watcher.enabled` is set. `--run`/`--once` are testing aids;
-  `--config` picks the file. Off Windows both entry points exit silently. `watcher.tray` /
-  `general.tray` show a green/red/gray tray icon (`util/tray.py`). Restart after editing.
+  via `store_events` when `general.watcher` is set. `--run`/`--once` are testing aids;
+  `--config` picks the file. Off Windows both entry points exit silently. `watcher.tray`
+  shows a green/red/gray tray icon (`util/tray.py`). Restart after editing.
 - `tests/` — pytest (`TestClient`, temp config/db)
 
 ## Backend (FastAPI, Python 3.12)
@@ -90,9 +90,10 @@ React/TS/Vite frontend, single server serving the built frontend.
   The file materializes itself: `AppConfig.load` writes a missing file with every default and
   rewrites one that is missing keys, so `config.yaml` always documents all knobs (rewrites
   keep values, drop comments/unknown keys). `general` holds the server (api_port, database,
-  stale_after_seconds, tray, ssl_*, basic_auth_*); `watcher` holds the desktop watcher
-  (enabled, tray, sampling thresholds, source/actor/host/task, process_config, standalone
-  connection settings). Sources need no configuration (see Ingest).
+  stale_after_seconds, `watcher` to embed the desktop watcher, ssl_*, basic_auth_*); the
+  `watcher` section holds the desktop watcher's settings (tray, sampling thresholds,
+  source/actor/host/task, process_config, standalone connection settings). Sources need no
+  configuration (see Ingest).
 - **Auth**: optional HTTP Basic auth on every `/api/*` route via the `require_auth` dependency
   (`api/deps.py`), mounted by `create_app` only when `general.basic_auth_username` is set.
   Credentials compared with `secrets.compare_digest`; a mismatch returns `401` +

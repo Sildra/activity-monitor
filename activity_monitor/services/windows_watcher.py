@@ -39,7 +39,7 @@ variables override it):
 - **Standalone**: `python -m activity_monitor.services.windows_watcher`
   POSTs each event to the running backend's ingest endpoint (`watcher.tray`
   adds a tray icon showing the backend connection state while it runs).
-- **Embedded**: the backend starts it in-process when `watcher.enabled` is
+- **Embedded**: the backend starts it in-process when `general.watcher` is
   set and events are written straight to the database.
 
 Only Windows has an implementation; on any other OS both entry points exit

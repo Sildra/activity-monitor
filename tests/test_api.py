@@ -5,7 +5,6 @@ import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,7 +25,7 @@ def make_client(tmp_path: Path, stale: int | None = None, basic_auth: tuple[str,
         general += f"\n  basic_auth_username: {username}\n  basic_auth_password: {password}"
 
     config = tmp_path / "config.yaml"
-    config.write_text(f"general:\n{general}\nwatcher:\n  enabled: false\n", encoding="utf-8")
+    config.write_text(f"general:\n{general}\n", encoding="utf-8")
 
     return TestClient(create_app(AppConfig.load(config)))
 
@@ -1211,12 +1210,3 @@ def test_host_column_backfilled_for_existing_db(tmp_path: Path) -> None:
     columns = {row[1] for row in conn.execute("pragma table_info(activityevent)")}
     conn.close()
     assert "host" in columns
-
-
-def test_lifespan_marks_tray_ready_once_started(tmp_path: Path) -> None:
-    client = make_client(tmp_path)
-    states: list[bool] = []
-    client.app.state.tray = SimpleNamespace(set_state=states.append)
-
-    with client:
-        assert states == [True]

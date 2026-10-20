@@ -16,20 +16,21 @@ def test_missing_file_is_written_with_full_defaults(tmp_path: Path) -> None:
 
     assert path.is_file()
     assert config.general.api_port == 8001
-    assert config.watcher.enabled is False
+    assert config.general.watcher is False
+    assert config.watcher.tray is False
     # The written file loads back to exactly the same config.
     assert AppConfig.load(path) == config
 
 
 def test_missing_keys_are_filled_in_and_values_kept(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
-    path.write_text("general:\n  api_port: 9100\nwatcher:\n  enabled: true\n", encoding="utf-8")
+    path.write_text("general:\n  api_port: 9100\nwatcher:\n  tray: true\n", encoding="utf-8")
 
     config = AppConfig.load(path)
 
     assert config.general.api_port == 9100  # the user's value survived
     assert config.general.database == "activity.db"  # the missing key got its default
-    assert config.watcher.enabled is True
+    assert config.watcher.tray is True
     assert config.watcher.poll == 1.0
     # The rewrite healed the file: a second load changes nothing.
     assert AppConfig.load(path) == config
